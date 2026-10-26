@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="RiotFix"
         Icon="pack://application:,,,/RiotFix;component/Assets/RiotFix.ico"
-        Width="580" Height="660" MinWidth="460" MinHeight="520"
+        Width="520" Height="520" MinWidth="420" MinHeight="440"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource Bg}"
         Foreground="{DynamicResource Text}"
@@ -14,25 +14,34 @@
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
   </Window.Resources>
 
+  <!-- One screen, one main action: status, a short message and one prominent button.
+       Everything technical is behind the small ⓘ button («Подробности»). -->
   <Grid x:Name="Root" Background="{DynamicResource Bg}">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
     <!-- Header -->
-    <StackPanel Grid.Row="0" Margin="28,24,28,0">
-      <TextBlock Text="RiotFix" FontSize="22" FontWeight="SemiBold" />
-      <TextBlock Text="Диагностика подключения к сервисам Riot Games" Foreground="{DynamicResource TextMuted}" FontSize="13" Margin="0,2,0,0" />
-    </StackPanel>
+    <Grid Grid.Row="0" Margin="28,22,18,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <StackPanel>
+        <TextBlock Text="RiotFix" FontSize="20" FontWeight="SemiBold" />
+        <TextBlock Text="Проверка подключения к Riot Games" Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,1,0,0" />
+      </StackPanel>
+      <Button x:Name="DetailsButton" Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE946;" VerticalAlignment="Top"
+              Command="{Binding OpenDetailsCommand}" ToolTip="Подробности для поддержки" AutomationProperties.Name="Подробности" />
+    </Grid>
 
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Margin="0,20,0,0">
-      <StackPanel Margin="28,0,28,8">
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+      <StackPanel VerticalAlignment="Center" Margin="32,16,32,16" MaxWidth="420">
 
         <!-- Update notice: shown only when GitHub Releases has a newer version the user has not dismissed -->
-        <Border Background="{DynamicResource AccentSoft}" CornerRadius="8" Padding="14,10,8,10" Margin="0,0,0,12"
+        <Border Background="{DynamicResource AccentSoft}" CornerRadius="8" Padding="14,10,8,10" Margin="0,0,0,20"
                 Visibility="{Binding HasUpdate, Converter={StaticResource BoolToVisibility}}">
           <Grid>
             <Grid.ColumnDefinitions>
@@ -60,103 +69,43 @@
         </Border>
 
         <!-- Status -->
-        <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="8" Padding="20,18">
-          <StackPanel>
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-              </Grid.ColumnDefinitions>
-              <Border Width="36" Height="36" CornerRadius="18" VerticalAlignment="Top" Style="{StaticResource ToneBadge}">
-                <TextBlock Style="{StaticResource ToneGlyph}" />
-              </Border>
-              <StackPanel Grid.Column="1" Margin="14,0,0,0">
-                <TextBlock Text="{Binding Headline}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"
-                           AutomationProperties.LiveSetting="Assertive" />
-                <TextBlock Text="{Binding Body}" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,4,0,0" LineHeight="20" />
-              </StackPanel>
-            </Grid>
-
-            <StackPanel Margin="0,16,0,0" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}">
-              <ProgressBar Style="{StaticResource ThinProgress}" AutomationProperties.Name="Выполняется" />
-              <TextBlock Text="{Binding ProgressText}" Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,8,0,0" />
-            </StackPanel>
-
-            <!-- Per-service summary -->
-            <ItemsControl ItemsSource="{Binding Services}" Margin="0,14,0,0" Focusable="False"
-                          Visibility="{Binding HasServices, Converter={StaticResource BoolToVisibility}}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="0,9">
-                    <Grid>
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                      </Grid.ColumnDefinitions>
-                      <Ellipse Width="8" Height="8" VerticalAlignment="Center" Style="{StaticResource ToneDot}" />
-                      <StackPanel Grid.Column="1" Margin="12,0,12,0">
-                        <TextBlock Text="{Binding DisplayName}" FontSize="13" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding Host}" FontSize="12" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Host}" />
-                      </StackPanel>
-                      <TextBlock Grid.Column="2" Text="{Binding StatusText}" FontSize="12" VerticalAlignment="Center" Style="{StaticResource ToneText}" />
-                    </Grid>
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </StackPanel>
+        <Border Width="64" Height="64" CornerRadius="32" HorizontalAlignment="Center" Style="{StaticResource ToneBadge}">
+          <TextBlock Style="{StaticResource ToneGlyph}" FontSize="26" />
         </Border>
+        <TextBlock Text="{Binding Headline}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center"
+                   Margin="0,16,0,0" AutomationProperties.LiveSetting="Assertive" />
+        <TextBlock Text="{Binding Body}" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" TextAlignment="Center"
+                   Margin="0,6,0,0" LineHeight="20" />
 
-        <!-- Details -->
-        <Expander Header="Детали" Style="{StaticResource DetailsExpander}" Margin="0,16,0,8">
-          <StackPanel>
-            <TextBox Style="{StaticResource ReportBox}" Text="{Binding Details, Mode=OneWay}" AutomationProperties.Name="Отчёт о проверке" />
-            <WrapPanel Margin="0,10,0,0">
-              <Button Style="{StaticResource LinkButton}" Content="Скопировать отчёт" Command="{Binding CopyReportCommand}" Margin="0,0,18,4" />
-              <Button Style="{StaticResource LinkButton}" Content="Открыть папку журналов" Command="{Binding OpenLogsCommand}" Margin="0,0,18,4" />
-            </WrapPanel>
-            <TextBlock FontSize="12" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0">
-              <Run Text="Файл hosts:" /> <Run Text="{Binding HostsPath, Mode=OneWay}" />
-              <LineBreak />
-              <Run Text="Резервная копия (создаётся перед первым изменением):" /> <Run Text="{Binding BackupPath, Mode=OneWay}" />
-            </TextBlock>
-          </StackPanel>
-        </Expander>
+        <StackPanel Margin="0,18,0,0" Width="220" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}">
+          <ProgressBar Style="{StaticResource ThinProgress}" AutomationProperties.Name="Выполняется" />
+          <TextBlock Text="{Binding ProgressText}" Foreground="{DynamicResource TextMuted}" FontSize="12" TextAlignment="Center" Margin="0,8,0,0" />
+        </StackPanel>
+
+        <!-- The one main action -->
+        <Grid Margin="0,24,0,0" HorizontalAlignment="Center" Visibility="{Binding IsIdle, Converter={StaticResource BoolToVisibility}}">
+          <Button x:Name="PrimaryCheck" Style="{StaticResource HeroButton}" Content="{Binding CheckText}" Command="{Binding CheckCommand}"
+                  IsDefault="True" Visibility="{Binding ShowCheckAsPrimary, Converter={StaticResource BoolToVisibility}}" />
+          <Button x:Name="PrimaryFix" Style="{StaticResource HeroButton}" Content="Исправить подключение" Command="{Binding FixCommand}"
+                  Visibility="{Binding FixReady, Converter={StaticResource BoolToVisibility}}" />
+        </Grid>
+
+        <!-- Secondary actions: quiet links that never compete with the main button -->
+        <WrapPanel HorizontalAlignment="Center" Margin="0,14,0,0">
+          <Button Style="{StaticResource LinkButton}" Content="Проверить снова" Command="{Binding CheckCommand}" Margin="10,0"
+                  Visibility="{Binding ShowRecheckLink, Converter={StaticResource BoolToVisibility}}" />
+          <Button Style="{StaticResource LinkButton}" Content="Остановить проверку" Command="{Binding CancelCommand}" Margin="10,0" IsCancel="True"
+                  Visibility="{Binding CanCancel, Converter={StaticResource BoolToVisibility}}" />
+          <Button Style="{StaticResource LinkButton}" Content="Отменить изменения" Command="{Binding RevertCommand}" Margin="10,0"
+                  ToolTip="Убрать изменения, которые RiotFix вносил раньше"
+                  Visibility="{Binding ShowRevertLink, Converter={StaticResource BoolToVisibility}}" />
+        </WrapPanel>
       </StackPanel>
     </ScrollViewer>
 
-    <!-- Actions: pinned above the footer so the main button is always visible -->
-    <Border Grid.Row="2" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="28,14,28,6">
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="Auto" />
-          </Grid.ColumnDefinitions>
-          <WrapPanel Orientation="Horizontal">
-            <Button x:Name="PrimaryCheck" Style="{StaticResource PrimaryButton}" Content="{Binding CheckText}" Command="{Binding CheckCommand}"
-                    Margin="0,0,8,8" IsDefault="True"
-                    Visibility="{Binding ShowCheckAsPrimary, Converter={StaticResource BoolToVisibility}}" />
-            <Button x:Name="PrimaryFix" Style="{StaticResource PrimaryButton}" Content="Исправить" Command="{Binding FixCommand}"
-                    Margin="0,0,8,8"
-                    Visibility="{Binding FixReady, Converter={StaticResource BoolToVisibility}}" />
-            <Button Style="{StaticResource SecondaryButton}" Content="Проверить снова" Command="{Binding CheckCommand}"
-                    Margin="0,0,8,8"
-                    Visibility="{Binding FixReady, Converter={StaticResource BoolToVisibility}}" />
-            <Button Style="{StaticResource SecondaryButton}" Content="Отмена" Command="{Binding CancelCommand}"
-                    Margin="0,0,8,8" IsCancel="True"
-                    Visibility="{Binding CanCancel, Converter={StaticResource BoolToVisibility}}" />
-          </WrapPanel>
-          <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" Content="Отменить изменения" Command="{Binding RevertCommand}"
-                  VerticalAlignment="Top" Margin="8,0,0,8"
-                  ToolTip="Удалить записи RiotFix из файла hosts и вернуть сторонние строки, которые RiotFix закомментировал"
-                  ToolTipService.ShowOnDisabled="True" />
-        </Grid>
-    </Border>
-
     <!-- Footer -->
-    <Grid Grid.Row="3" Margin="28,4,28,14">
-      <TextBlock FontSize="12" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap">
+    <Grid Grid.Row="2" Margin="28,4,28,14">
+      <TextBlock FontSize="12" Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" TextAlignment="Center">
         <Run Text="{Binding Version, Mode=OneWay}" />
         <Run Text=" · " />
         <Hyperlink Command="{Binding OpenRepositoryCommand}" Foreground="{DynamicResource AccentLink}">Исходный код</Hyperlink>

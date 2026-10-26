@@ -108,6 +108,14 @@ public sealed class FixPreflight
             return "result is older than 5 minutes (or the clock changed)";
         }
 
+        // A plan that exists only because the system DNS failed is never trusted blindly: such failures are often
+        // short-lived, so check from scratch whether the system DNS works again before writing anything.
+        var newHosts = report.Plan.NewPins.Select(p => p.Host).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (report.Domains.Any(d => newHosts.Contains(d.Host) && !d.SystemDns.Success))
+        {
+            return "the fix is based on a system DNS failure";
+        }
+
         HostsDocument? hosts;
         try
         {

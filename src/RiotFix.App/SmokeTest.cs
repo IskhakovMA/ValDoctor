@@ -41,44 +41,53 @@ internal static class SmokeTest
             window.DataContext = vm;
             window.Show();
 
-            ThemeManager.Apply(app, dark: false);
-            Render(window, outputDir, "01-light-initial.png");
-
-            var fix = SampleData.FixAvailable();
-            vm.ShowReport(fix, Texts.ForReport(fix));
-            Render(window, outputDir, "02-light-fix-available.png");
-
-            var expander = FindChild<Expander>(window);
-            if (expander is not null)
+            void State(string file, DiagnosisReport? report = null, StatusMessage? message = null)
             {
-                window.Height = 1000;
-                expander.IsExpanded = true;
-                Render(window, outputDir, "03-light-details.png");
-                expander.IsExpanded = false;
-                window.Height = 660;
+                if (report is not null)
+                {
+                    vm.ShowReport(report, message ?? Texts.ForReport(report));
+                }
+
+                Render(window, outputDir, file);
+                AssertPlainMainScreen(window, file);
             }
 
+            ThemeManager.Apply(app, dark: false);
+            State("01-light-initial.png");
+            vm.Preview(busy: new StatusMessage(StatusTone.Neutral, "Проверяем подключение…", "Это займёт несколько секунд."));
+            State("02-light-checking.png");
+            vm.Preview();
+            State("03-light-working.png", SampleData.AllHealthy());
+            State("04-light-problem-fixable.png", SampleData.FixAvailable());
+
+            var after = SampleData.AllHealthy();
+            vm.Preview(canRevert: true);
+            State("05-light-applied.png", after, Texts.AfterFix(after, SampleData.FixAvailable().Plan.NewPins));
+            vm.Preview(canRevert: false);
+            State("06-light-no-safe-fix.png", SampleData.NoFix());
+
+            // The technical report is still there, one click away.
+            var details = new DetailsWindow { DataContext = vm, ShowActivated = false, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = 0, Top = 0 };
+            details.Show();
+            Render(details, outputDir, "07-light-details-window.png");
+            if (!vm.Details.Contains("auth.riotgames.com", StringComparison.Ordinal) || PlainTextPolicy.FindTechnicalTerms(vm.Details).Count == 0)
+            {
+                throw new InvalidOperationException("The details window must keep the full technical report.");
+            }
+
+            details.Close();
+
             ThemeManager.Apply(app, dark: true);
-            var healthy = SampleData.AllHealthy();
-            vm.ShowReport(healthy, Texts.ForReport(healthy));
-            Render(window, outputDir, "04-dark-healthy.png");
-
-            vm.ShowReport(fix, Texts.ForReport(fix));
-            Render(window, outputDir, "05-dark-fix-available.png");
-
-            var limited = SampleData.Limited();
-            vm.ShowReport(limited, Texts.ForReport(limited));
+            State("08-dark-working-limited.png", SampleData.Limited());
             vm.ShowUpdate(new ReleaseInfo(SemVersion.Create(9, 9, 9), "v9.9.9", "RiotFix v9.9.9", "Пример уведомления об обновлении (smoke test)",
                 UpdateChecker.ReleaseUrl("v9.9.9"), true));
-            Render(window, outputDir, "06-dark-limited-update.png");
+            State("09-dark-problem-fixable-update.png", SampleData.FixAvailable());
             vm.ShowUpdate(null);
 
-            window.Width = 460;
-            window.Height = 520;
-            Render(window, outputDir, "07-dark-min-size.png");
-
-            ThemeManager.Apply(app, dark: false);
-            Render(window, outputDir, "08-light-min-size.png");
+            window.Width = 420;
+            window.Height = 440;
+            vm.Preview(canRevert: true);
+            State("10-dark-min-size-revert.png", SampleData.NoFix());
 
             File.WriteAllText(Path.Join(outputDir, "smoke-ok.txt"), $"RiotFix {AppInfo.Version} smoke test passed");
             window.Close();
@@ -89,6 +98,36 @@ internal static class SmokeTest
             File.WriteAllText(Path.Join(outputDir, "smoke-error.txt"), ex.ToString());
             log.Error("Smoke test failed.", ex);
             return 1;
+        }
+    }
+
+    /// <summary>Fails if any visible text on the main window contains technical details (IPs, hosts, protocols, paths).</summary>
+    private static void AssertPlainMainScreen(Window window, string state)
+    {
+        var texts = new List<string>();
+        Collect(window, texts);
+        var found = texts.SelectMany(PlainTextPolicy.FindTechnicalTerms).Distinct().ToList();
+        if (found.Count > 0)
+        {
+            throw new InvalidOperationException($"{state}: technical details on the main screen: {string.Join(", ", found)}");
+        }
+    }
+
+    private static void Collect(DependencyObject node, List<string> texts)
+    {
+        if (node is UIElement { IsVisible: false })
+        {
+            return;
+        }
+
+        if (node is TextBlock tb)
+        {
+            texts.Add(tb.Text);
+        }
+
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            Collect(VisualTreeHelper.GetChild(node, i), texts);
         }
     }
 
@@ -110,31 +149,15 @@ internal static class SmokeTest
         encoder.Save(stream);
     }
 
-    private static T? FindChild<T>(DependencyObject parent)
-        where T : DependencyObject
-    {
-        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is T match)
-            {
-                return match;
-            }
-
-            if (FindChild<T>(child) is { } nested)
-            {
-                return nested;
-            }
-        }
-
-        return null;
-    }
-
     private sealed class NoDialogs : IDialogs
     {
         public bool Confirm(string title, string message) => false;
 
         public void Info(string title, string message)
+        {
+        }
+
+        public void ShowDetails(object dataContext)
         {
         }
     }
@@ -178,6 +201,16 @@ internal static class SampleData
             Healthy(all[5], "104.18.36.199"),
         };
         return Report(domains, Verdict.LimitedConnectivity);
+    }
+
+    /// <summary>An essential service is down and no verified alternative exists.</summary>
+    public static DiagnosisReport NoFix()
+    {
+        var all = RiotServices.All;
+        var domains = all.Select((s, i) => i == 0
+            ? Broken(s, "104.16.119.50", ProbeFailure.TlsTimeout, candidate: null)
+            : Healthy(s, $"104.16.{100 + i}.50")).ToList();
+        return Report(domains, Verdict.ProblemsWithoutFix);
     }
 
     private static DiagnosisReport Report(List<DomainDiagnosis> domains, Verdict verdict) =>

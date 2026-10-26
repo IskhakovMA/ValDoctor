@@ -78,4 +78,6 @@ internal interface IDialogs
     bool Confirm(string title, string message);
 
     void Info(string title, string message);
+
+    void ShowDetails(object dataContext);
 }

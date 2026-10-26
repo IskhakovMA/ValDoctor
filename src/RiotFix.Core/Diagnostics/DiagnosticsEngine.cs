@@ -20,6 +20,13 @@ public sealed record DiagnosticsOptions
 
     public TimeSpan DnsTimeout { get; init; } = TimeSpan.FromSeconds(8);
 
+    /// <summary>
+    /// Pauses before re-asking the system DNS after a failed lookup. A real log (26.10.2026) showed the system DNS
+    /// not answering for all six hosts at once and working again seconds later; without retries RiotFix proposed six
+    /// unnecessary hosts entries. A persistent failure still fails after the retries and gets a verified fix.
+    /// </summary>
+    public IReadOnlyList<TimeSpan> DnsRetryDelays { get; init; } = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3)];
+
     public TimeSpan TrustedDnsTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>Hard upper bound for one probe, on top of the prober's own per-stage timeouts.</summary>
@@ -41,6 +48,7 @@ public sealed class DiagnosticsEngine
     private readonly Func<HostsDocument?> _loadHosts;
     private readonly DiagnosticsOptions _options;
     private readonly IRiotFixLog _log;
+    private readonly Action? _flushDnsCache;
 
     public DiagnosticsEngine(
         ISystemResolver system,
@@ -49,8 +57,10 @@ public sealed class DiagnosticsEngine
         IProxyDetector proxy,
         Func<HostsDocument?> loadHosts,
         DiagnosticsOptions? options = null,
-        IRiotFixLog? log = null)
+        IRiotFixLog? log = null,
+        Action? flushDnsCache = null)
     {
+        _flushDnsCache = flushDnsCache;
         _system = system;
         _trusted = trusted;
         _prober = prober;
@@ -85,9 +95,26 @@ public sealed class DiagnosticsEngine
         var completed = 0;
         progress?.Report(new DiagnosisProgress(0, services.Count, "Проверяем подключение…"));
 
+        // The Windows DNS cache may hold the failed answer; clear it once per run (no admin rights needed).
+        var flushed = 0;
+        void FlushOnce()
+        {
+            if (Interlocked.Exchange(ref flushed, 1) == 0 && _flushDnsCache is not null)
+            {
+                try
+                {
+                    _flushDnsCache();
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _log.Warn($"DNS cache flush failed ({ex.GetType().Name}).");
+                }
+            }
+        }
+
         var tasks = services.Select(async service =>
         {
-            var result = await DiagnoseAsync(service, hosts, throttle, progress, services.Count, cancellationToken).ConfigureAwait(false);
+            var result = await DiagnoseAsync(service, hosts, throttle, progress, services.Count, FlushOnce, cancellationToken).ConfigureAwait(false);
             var done = Interlocked.Increment(ref completed);
             progress?.Report(new DiagnosisProgress(done, services.Count, $"Проверено {done} из {services.Count}"));
             return result;
@@ -181,6 +208,7 @@ public sealed class DiagnosticsEngine
         SemaphoreSlim throttle,
         IProgress<DiagnosisProgress>? progress,
         int total,
+        Action flushOnce,
         CancellationToken cancellationToken)
     {
         var host = service.Host;
@@ -190,6 +218,20 @@ public sealed class DiagnosticsEngine
             : HostsOverride.None;
 
         var dns = await ResolveSystemAsync(host, cancellationToken).ConfigureAwait(false);
+        var retried = false;
+        for (var i = 0; !dns.Success && i < _options.DnsRetryDelays.Count; i++)
+        {
+            retried = true;
+            if (i == 0)
+            {
+                flushOnce();
+            }
+
+            await Task.Delay(_options.DnsRetryDelays[i], cancellationToken).ConfigureAwait(false);
+            dns = await ResolveSystemAsync(host, cancellationToken).ConfigureAwait(false);
+            _log.Info($"{host}: system DNS retry {i + 1}: {dns.Failure}.");
+        }
+
         var addresses = SelectSystemAddresses(dns.Addresses);
         var probes = await Task.WhenAll(addresses.Select(a => ProbeAsync(host, a, throttle, cancellationToken))).ConfigureAwait(false);
         var health = Classify(dns, probes);
@@ -200,14 +242,14 @@ public sealed class DiagnosticsEngine
         IReadOnlyList<CandidateEvidence> candidates = [];
         if (health is DomainHealth.Degraded or DomainHealth.Failed)
         {
-            progress?.Report(new DiagnosisProgress(0, total, $"Ищем рабочий адрес для {host}…"));
+            progress?.Report(new DiagnosisProgress(0, total, "Ищем рабочий вариант подключения…"));
             trusted = await QueryTrustedAsync(host, cancellationToken).ConfigureAwait(false);
             candidates = await VerifyCandidatesAsync(host, hostsOverride, probes, trusted, throttle, cancellationToken).ConfigureAwait(false);
             _log.Info($"{host}: trusted=[{string.Join("; ", trusted.Select(t => $"{t.ResolverName}:{(t.Responded ? string.Join(",", t.Addresses) : "no answer " + t.Error)}"))}] " +
                       $"candidates=[{string.Join("; ", candidates.Select(c => $"{c.Address} verified={c.Verified} src={c.Sources.Count}"))}]");
         }
 
-        return new DomainDiagnosis(service, dns, probes, health, hostsOverride, trusted, candidates);
+        return new DomainDiagnosis(service, dns, probes, health, hostsOverride, trusted, candidates, retried);
     }
 
     private async Task<SystemDnsAnswer> ResolveSystemAsync(string host, CancellationToken cancellationToken)

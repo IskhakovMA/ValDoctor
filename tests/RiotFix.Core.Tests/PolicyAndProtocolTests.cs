@@ -168,8 +168,9 @@ public class TextsTests
     {
         var msg = Texts.ForReport(Report(Verdict.AllHealthy, Domain("auth.riotgames.com", DomainHealth.Healthy)));
         Assert.Equal(StatusTone.Success, msg.Tone);
-        Assert.Contains("не гарантирует", msg.Body, StringComparison.Ordinal);
-        Assert.DoesNotContain("исправлен", msg.Body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Проблем с доступом к сервисам Riot не обнаружено.", msg.Body);
+        Assert.DoesNotContain("игра работает", msg.Body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("гарантир", msg.Body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -179,17 +180,18 @@ public class TextsTests
 
         var ok = Texts.AfterFix(Report(Verdict.AllHealthy, Domain("auth.riotgames.com", DomainHealth.Healthy)), [pin]);
         Assert.Equal(StatusTone.Success, ok.Tone);
-        Assert.Contains("не гарантирует", ok.Body, StringComparison.Ordinal);
+        Assert.Equal("Перезапустите Riot Client и попробуйте войти.", ok.Body);
 
         // A pinned host that still fails is reported, but rollback is only suggested if sign-in does not work.
         var failed = Texts.AfterFix(Report(Verdict.ProblemsWithoutFix, Domain("auth.riotgames.com", DomainHealth.Failed)), [pin]);
         Assert.Equal(StatusTone.Warning, failed.Tone);
-        Assert.Contains("Если вход не работает", failed.Body, StringComparison.Ordinal);
+        Assert.Contains("Если не получится", failed.Body, StringComparison.Ordinal);
         Assert.Contains("Отменить изменения", failed.Body, StringComparison.Ordinal);
 
         var partial = Texts.AfterFix(Report(Verdict.ProblemsWithoutFix,
             Domain("auth.riotgames.com", DomainHealth.Healthy), Domain("clientconfig.rpg.riotgames.com", DomainHealth.Failed)), [pin]);
         Assert.Equal(StatusTone.Warning, partial.Tone);
-        Assert.Contains("clientconfig.rpg.riotgames.com", partial.Body, StringComparison.Ordinal);
+        Assert.Contains("Часть проблем осталась", partial.Body, StringComparison.Ordinal);
+        Assert.Empty(PlainTextPolicy.FindTechnicalTerms(partial.Body));
     }
 }

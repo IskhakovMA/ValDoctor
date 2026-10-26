@@ -16,8 +16,6 @@ using RiotFix.Core.Updates;
 
 namespace RiotFix.App.ViewModels;
 
-internal sealed record ServiceRow(string DisplayName, string Host, string StatusText, StatusTone Tone);
-
 /// <summary>Wires the Core engine to Windows: hosts path, DoH client, prober, elevation, logs.</summary>
 internal sealed class AppComposition
 {
@@ -86,6 +84,7 @@ internal sealed class MainViewModel : ObservableObject
     private bool _canRevert;
     private string _details = "Проверка ещё не выполнялась.";
     private ReleaseInfo? _update;
+    private bool _statusChanged;
     private UpdateChecker? _updateChecker;
 
     public MainViewModel(AppComposition app, IDialogs dialogs)
@@ -107,10 +106,11 @@ internal sealed class MainViewModel : ObservableObject
             }
         });
         DismissUpdateCommand = new RelayCommand(DismissUpdate);
+        OpenDetailsCommand = new RelayCommand(() => _dialogs.ShowDetails(this));
         RefreshHostsState();
         if (CanRevert)
         {
-            _body += " В файле hosts уже есть записи RiotFix — их можно удалить кнопкой «Отменить изменения».";
+            _body += " Изменения, которые RiotFix внёс раньше, можно отменить кнопкой «Отменить изменения».";
         }
     }
 
@@ -169,7 +169,8 @@ internal sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(UpdateSummary));
     }
 
-    public ObservableCollection<ServiceRow> Services { get; } = [];
+    /// <summary>Opens the technical details window (report, logs, hosts path). Never shown by default.</summary>
+    public RelayCommand OpenDetailsCommand { get; }
 
     public string Version { get; } = $"Версия {AppInfo.Version}";
 
@@ -187,7 +188,6 @@ internal sealed class MainViewModel : ObservableObject
 
     public string Details { get => _details; private set => SetProperty(ref _details, value); }
 
-    public bool HasServices => Services.Count > 0;
 
     public bool IsBusy
     {
@@ -197,6 +197,8 @@ internal sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _isBusy, value))
             {
                 OnPropertyChanged(nameof(IsIdle));
+                OnPropertyChanged(nameof(ShowRecheckLink));
+                OnPropertyChanged(nameof(ShowRevertLink));
                 RaiseCommands();
             }
         }
@@ -225,12 +227,19 @@ internal sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _fixReady, value))
             {
                 OnPropertyChanged(nameof(ShowCheckAsPrimary));
+                OnPropertyChanged(nameof(ShowRecheckLink));
                 RaiseCommands();
             }
         }
     }
 
     public bool ShowCheckAsPrimary => !FixReady;
+
+    /// <summary>«Проверить снова» as a quiet link while «Исправить подключение» is the main button.</summary>
+    public bool ShowRecheckLink => FixReady && !IsBusy;
+
+    /// <summary>«Отменить изменения» appears only when RiotFix changed something before.</summary>
+    public bool ShowRevertLink => CanRevert && !IsBusy;
 
     public string CheckText => _hasChecked ? "Проверить снова" : "Проверить подключение";
 
@@ -241,8 +250,29 @@ internal sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref _canRevert, value))
             {
+                OnPropertyChanged(nameof(ShowRevertLink));
                 RaiseCommands();
             }
+        }
+    }
+
+    /// <summary>Smoke test only: shows the "checking" or "revert available" look without doing any work.</summary>
+    internal void Preview(StatusMessage? busy = null, bool? canRevert = null)
+    {
+        if (canRevert is { } revert)
+        {
+            CanRevert = revert;
+        }
+
+        IsBusy = busy is not null;
+        if (busy is not null)
+        {
+            ProgressText = "Проверено 2 из 6";
+            SetBusyStatus(busy);
+        }
+        else
+        {
+            ProgressText = string.Empty;
         }
     }
 
@@ -254,22 +284,6 @@ internal sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CheckText));
         SetStatus(message);
 
-        Services.Clear();
-        foreach (var d in report.Domains)
-        {
-            var hasFix = report.Plan.NewPins.Any(p => p.Host == d.Host);
-            var (text, tone) = d.Health switch
-            {
-                DomainHealth.Healthy or DomainHealth.PartiallyReachable => (Texts.Health(d.Health), StatusTone.Success),
-                DomainHealth.ServerError => (Texts.Health(d.Health), StatusTone.Warning),
-                _ when hasFix => ($"{Texts.Health(d.Health)} · есть исправление", d.Health == DomainHealth.Degraded || !d.IsEssential ? StatusTone.Warning : StatusTone.Error),
-                _ when !d.IsEssential => ($"{Texts.Health(d.Health)} · вспомогательный", StatusTone.Warning),
-                _ => (Texts.Health(d.Health), d.Health == DomainHealth.Degraded ? StatusTone.Warning : StatusTone.Error),
-            };
-            Services.Add(new ServiceRow(d.Service.DisplayName, d.Host, text, tone));
-        }
-
-        OnPropertyChanged(nameof(HasServices));
         Details = ReportFormatter.Format(report, AppInfo.Version);
         FixReady = report.Plan.HasChanges;
         RefreshHostsState();
@@ -277,7 +291,7 @@ internal sealed class MainViewModel : ObservableObject
 
     private async Task CheckAsync()
     {
-        await RunBusyAsync("Проверяем подключение…", cancellable: true, async ct =>
+        await RunBusyAsync(new StatusMessage(StatusTone.Neutral, "Проверяем подключение…", "Это займёт несколько секунд."), cancellable: true, async ct =>
         {
             var report = await RunDiagnosisAsync(ct);
             ShowReport(report, Texts.ForReport(report));
@@ -306,17 +320,17 @@ internal sealed class MainViewModel : ObservableObject
         }
 
         var plan = ready.Plan;
-        await RunBusyAsync("Ожидаем разрешения администратора…", cancellable: false, async ct =>
+        await RunBusyAsync(new StatusMessage(StatusTone.Neutral, "Применяем исправление…", "Подтвердите запрос Windows на внесение изменений."), cancellable: false, async ct =>
         {
             var outcome = await _app.Elevation.RunAsync(ElevatedRequest.Apply(plan.DesiredPins, plan.RequiresConflictConsent));
-            if (!HandleElevationOutcome(outcome, "Файл hosts не изменён."))
+            if (!HandleElevationOutcome(outcome, "Ничего не изменено."))
             {
                 return;
             }
 
             // The re-check is not cancellable: the hosts file has already changed and the user must see the real result.
             // No automatic rollback: on a real PC sign-in and the game worked while some services still failed.
-            ProgressText = "Проверяем результат…";
+            SetBusyStatus(new StatusMessage(StatusTone.Neutral, "Проверяем результат…", "Это займёт несколько секунд."));
             await FlushDnsAsync();
             await Task.Delay(TimeSpan.FromMilliseconds(700), ct);
             DiagnosisReport after;
@@ -328,14 +342,14 @@ internal sealed class MainViewModel : ObservableObject
             {
                 _app.Log.Error("Re-check after fix failed.", ex);
                 RefreshHostsState();
-                SetStatus(new StatusMessage(StatusTone.Warning, "Записи добавлены, проверка не удалась",
-                    "Файл hosts изменён, но повторная проверка завершилась ошибкой. Нажмите «Проверить снова» или «Отменить изменения»."));
+                SetStatus(new StatusMessage(StatusTone.Warning, "Изменения применены",
+                    "Изменения внесены, но повторная проверка завершилась ошибкой. Нажмите «Проверить снова» или «Отменить изменения»."));
                 FixReady = false;
                 return;
             }
 
             ShowReport(after, outcome.ExitCode == ElevatedExitCode.NoChanges
-                ? Texts.ForReport(after) with { Headline = "Записи уже были в файле hosts" }
+                ? Texts.ForReport(after) with { Headline = "Исправление уже было применено" }
                 : Texts.AfterFix(after, plan.NewPins));
         });
     }
@@ -344,7 +358,7 @@ internal sealed class MainViewModel : ObservableObject
     private async Task<DiagnosisReport?> PreflightAsync()
     {
         DiagnosisReport? ready = null;
-        await RunBusyAsync("Проверяем, что найденные адреса всё ещё работают…", cancellable: true, async ct =>
+        await RunBusyAsync(new StatusMessage(StatusTone.Neutral, "Проверяем подключение…", "Перед исправлением RiotFix ещё раз убеждается, что оно нужно."), cancellable: true, async ct =>
         {
             var preflight = _app.CreatePreflight(RunDiagnosisAsync);
             var result = await preflight.CheckAsync(_report!, ct);
@@ -360,14 +374,14 @@ internal sealed class MainViewModel : ObservableObject
                     break;
                 case PreflightStatus.PlanChanged:
                     ShowReport(result.Report, new StatusMessage(StatusTone.Warning, "Результат проверки изменился",
-                        "Перед исправлением RiotFix проверил подключение ещё раз, и найденные адреса изменились. Файл hosts не изменён. " +
-                        "Посмотрите новый результат и нажмите «Исправить» ещё раз."));
+                        "Перед исправлением RiotFix проверил подключение ещё раз, и результат изменился. Ничего не изменено. " +
+                        "Посмотрите новый результат и при необходимости нажмите «Исправить» ещё раз."));
                     break;
                 default:
                     var message = Texts.ForReport(result.Report);
                     ShowReport(result.Report, message with
                     {
-                        Body = "Повторная проверка перед исправлением: подтверждённого исправления больше нет, файл hosts не изменён. " + message.Body,
+                        Body = "Перед исправлением RiotFix проверил ещё раз: исправление больше не требуется или его не удалось подтвердить. Ничего не изменено. " + message.Body,
                     });
                     break;
             }
@@ -388,7 +402,7 @@ internal sealed class MainViewModel : ObservableObject
     private async Task RevertAsync()
     {
         const string message =
-            "RiotFix удалит из файла hosts только свои записи и вернёт сторонние строки, которые закомментировал. " +
+            "RiotFix удалит только свои изменения и вернёт настройки, которые отключал. " +
             "Всё остальное содержимое файла, включая ваши изменения, останется как есть.\n\n" +
             "Windows запросит разрешение администратора. Продолжить?";
         if (!_dialogs.Confirm("Отменить изменения", message))
@@ -396,24 +410,22 @@ internal sealed class MainViewModel : ObservableObject
             return;
         }
 
-        await RunBusyAsync("Ожидаем разрешения администратора…", cancellable: false, async _ =>
+        await RunBusyAsync(new StatusMessage(StatusTone.Neutral, "Отменяем изменения…", "Подтвердите запрос Windows на внесение изменений."), cancellable: false, async _ =>
         {
             var outcome = await _app.Elevation.RunAsync(ElevatedRequest.Revert());
-            if (!HandleElevationOutcome(outcome, "Файл hosts не изменён."))
+            if (!HandleElevationOutcome(outcome, "Ничего не изменено."))
             {
                 return;
             }
 
             await FlushDnsAsync();
             _report = null;
-            Services.Clear();
-            OnPropertyChanged(nameof(HasServices));
             FixReady = false;
             Details = "Изменения RiotFix отменены. Проверка ещё не выполнялась.";
             SetStatus(outcome.ExitCode == ElevatedExitCode.NoChanges
-                ? new StatusMessage(StatusTone.Neutral, "Отменять нечего", "В файле hosts нет записей RiotFix.")
+                ? new StatusMessage(StatusTone.Neutral, "Отменять нечего", "RiotFix ничего не менял на этом компьютере.")
                 : new StatusMessage(StatusTone.Success, "Изменения отменены",
-                    "Записи RiotFix удалены из файла hosts, остальное содержимое не тронуто. Перезапустите Riot Client. Чтобы проверить подключение, нажмите «Проверить подключение»."));
+                    "Изменения RiotFix удалены, остальные настройки не тронуты. Перезапустите Riot Client. Чтобы проверить подключение, нажмите «Проверить подключение»."));
         });
     }
 
@@ -445,22 +457,22 @@ internal sealed class MainViewModel : ObservableObject
                 RefreshHostsState();
                 return true;
             case ElevatedExitCode.Conflict:
-                SetStatus(new StatusMessage(StatusTone.Warning, "Файл hosts изменился",
-                    $"После проверки в файле hosts появились другие записи для сервисов Riot. {unchanged} Проверьте подключение ещё раз."));
+                SetStatus(new StatusMessage(StatusTone.Warning, "Не удалось исправить",
+                    $"После проверки другая программа изменила сетевые настройки для Riot. {unchanged} Проверьте подключение ещё раз."));
                 return false;
             case ElevatedExitCode.InvalidArguments:
                 SetStatus(new StatusMessage(StatusTone.Error, "Изменение отклонено", $"Запрос не прошёл проверку безопасности. {unchanged}"));
                 return false;
             default:
                 var kind = ElevatedRunner.ToHostsError(outcome.ExitCode);
-                SetStatus(new StatusMessage(StatusTone.Error, "Не удалось изменить файл hosts",
+                SetStatus(new StatusMessage(StatusTone.Error, "Не удалось исправить",
                     kind is { } k ? Texts.HostsError(k) : $"Непредвиденная ошибка. {unchanged}"));
                 RefreshHostsState();
                 return false;
         }
     }
 
-    private async Task RunBusyAsync(string progress, bool cancellable, Func<CancellationToken, Task> action)
+    private async Task RunBusyAsync(StatusMessage busy, bool cancellable, Func<CancellationToken, Task> action)
     {
         if (IsBusy)
         {
@@ -469,12 +481,20 @@ internal sealed class MainViewModel : ObservableObject
 
         using var cts = new CancellationTokenSource();
         _cts = cts;
+        var previous = new StatusMessage(Tone, Headline, Body);
+        _statusChanged = false;
         IsBusy = true;
         CanCancel = cancellable;
-        ProgressText = progress;
+        ProgressText = string.Empty;
+        SetBusyStatus(busy);
         try
         {
             await action(cts.Token);
+            if (!_statusChanged)
+            {
+                // Nothing new to report (e.g. preflight confirmed the plan): keep showing the previous result.
+                SetStatus(previous);
+            }
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
@@ -484,7 +504,7 @@ internal sealed class MainViewModel : ObservableObject
         {
             _app.Log.Error("Unexpected error in UI operation.", ex);
             SetStatus(new StatusMessage(StatusTone.Error, "Что-то пошло не так",
-                "Операция завершилась с ошибкой. Подробности записаны в журнал (Детали → «Открыть папку журналов»)."));
+                "Операция завершилась с ошибкой. Подробности — по кнопке ⓘ в правом верхнем углу."));
         }
         finally
         {
@@ -495,41 +515,20 @@ internal sealed class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>Plain-language confirmation. Exact addresses and lines are in «Подробности».</summary>
     private static string BuildFixConfirmation(FixPlan plan)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(CultureInfo.InvariantCulture, $"RiotFix добавит в файл hosts {plan.NewPins.Count} {Texts.Plural(plan.NewPins.Count, "запись", "записи", "записей")}:");
-        sb.AppendLine();
-        foreach (var pin in plan.NewPins)
-        {
-            sb.AppendLine(CultureInfo.InvariantCulture, $"    {pin.Address}    {pin.Host}");
-        }
-
-        sb.AppendLine();
-        sb.AppendLine("Адреса получены от доверенных DNS-серверов и дважды проверены: защищённое соединение с действительным сертификатом и ответ сервера.");
-
-        if (plan.RemovedPins.Count > 0)
+        sb.AppendLine("RiotFix нашёл проверенный способ улучшить подключение к Riot Games и внесёт небольшое изменение в системные настройки сети Windows (файл hosts).");
+        if (plan.ConflictsToDisable.Count > 0 || plan.RemovedPins.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("Будут удалены прежние записи RiotFix, которые конфликтуют со сторонними строками:");
-            foreach (var pin in plan.RemovedPins)
-            {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"    {pin.Address}    {pin.Host}");
-            }
-        }
-
-        if (plan.ConflictsToDisable.Count > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine("В файле hosts уже есть сторонние строки для этих сервисов. Они не работают и будут закомментированы (вернуть их можно кнопкой «Отменить изменения»):");
-            foreach (var c in plan.ConflictsToDisable)
-            {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"    {c.LineText.Trim()}");
-            }
+            sb.AppendLine("Старые настройки для Riot, которые сейчас не работают, будут отключены. Их можно вернуть кнопкой «Отменить изменения».");
         }
 
         sb.AppendLine();
-        sb.AppendLine("Перед изменением будет создана резервная копия. Windows запросит разрешение администратора.");
+        sb.AppendLine("Перед изменением сохраняется резервная копия. Отменить изменение можно в любой момент кнопкой «Отменить изменения».");
+        sb.AppendLine("Windows попросит разрешение администратора.");
 
         bool riotRunning;
         try
@@ -564,8 +563,16 @@ internal sealed class MainViewModel : ObservableObject
         }
     }
 
+    private void SetBusyStatus(StatusMessage message)
+    {
+        Tone = message.Tone;
+        Headline = message.Headline;
+        Body = message.Body;
+    }
+
     private void SetStatus(StatusMessage message)
     {
+        _statusChanged = true;
         Tone = message.Tone;
         Headline = message.Headline;
         Body = message.Body;

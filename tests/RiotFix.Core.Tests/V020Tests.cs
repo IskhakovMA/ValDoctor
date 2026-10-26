@@ -29,7 +29,7 @@ public class ClassificationTests
     private readonly FakeProber _prober = new();
 
     private Task<DiagnosisReport> Run(params string[] hosts) =>
-        new DiagnosticsEngine(_dns, [_cloudflare, _google], _prober, new FakeProxy(), HostsDocument.Empty)
+        new DiagnosticsEngine(_dns, [_cloudflare, _google], _prober, new FakeProxy(), HostsDocument.Empty, TestOptions.Fast)
             .RunAsync(hosts.Select(h => RiotServices.Find(h)!).ToList(), null, CancellationToken.None);
 
     [Theory]
@@ -122,9 +122,12 @@ public class ClassificationTests
         Assert.Equal(Verdict.LimitedConnectivity, report.Verdict);
         Assert.True(report.EssentialReachable);
         Assert.False(report.Plan.HasChanges);
+        // Not a red error: the main services work. Plain wording, no promise that the game works.
         var message = Texts.ForReport(report);
-        Assert.Equal(StatusTone.Warning, message.Tone);
-        Assert.Contains("не всегда мешает входу", message.Body, StringComparison.Ordinal);
+        Assert.Equal(StatusTone.Success, message.Tone);
+        Assert.Equal("Подключение работает", message.Headline);
+        Assert.Contains("вход и игра при этом могут работать", message.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("гарантир", message.Body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("невозможен", message.Body, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -136,12 +139,12 @@ public class ClassificationTests
         _cloudflare.Set(Auth, "104.16.119.50");
         _prober.Ok(Auth, "104.16.119.50");
         var engine = new DiagnosticsEngine(_dns, [_cloudflare], _prober, new FakeProxy(),
-            () => HostsDocument.Parse(Encoding.ASCII.GetBytes("104.16.120.50 auth.riotgames.com example.com\r\n")));
+            () => HostsDocument.Parse(Encoding.ASCII.GetBytes("104.16.120.50 auth.riotgames.com example.com\r\n")), TestOptions.Fast);
 
         var report = await engine.RunAsync([RiotServices.Find(Auth)!], null, CancellationToken.None);
 
         Assert.Equal(Verdict.ProblemsWithoutFix, report.Verdict);
-        Assert.Contains("сторонняя строка", Texts.ForReport(report).Body, StringComparison.Ordinal);
+        Assert.Contains("чужие правила", Texts.ForReport(report).Body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -157,7 +160,8 @@ public class ClassificationTests
         Assert.Equal(Verdict.ProblemsWithoutFix, report.Verdict);
         Assert.False(report.Plan.HasChanges);
         var message = Texts.ForReport(report);
-        Assert.Contains("не доказывает, что вход невозможен", message.Body, StringComparison.Ordinal);
+        Assert.Equal("Не удалось найти безопасное исправление", message.Headline);
+        Assert.Contains("Вход в игру при этом может работать", message.Body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -211,7 +215,7 @@ public class ClassificationTests
         var message = Texts.AfterFix(after, [new HostPin(Auth, IPAddress.Parse("104.16.120.50"))]);
 
         Assert.Equal(StatusTone.Success, message.Tone);
-        Assert.Contains("вспомогательные", message.Body, StringComparison.Ordinal);
+        Assert.Equal("Перезапустите Riot Client и попробуйте войти.", message.Body);
         Assert.DoesNotContain("Отменить изменения", message.Body, StringComparison.Ordinal);
     }
 
@@ -232,7 +236,7 @@ public class FixPreflightTests
     private HostsDocument _hosts = HostsDocument.Empty();
     private int _diagnoses;
 
-    private DiagnosticsEngine Engine() => new(_dns, [_cloudflare], _prober, new FakeProxy(), () => _hosts);
+    private DiagnosticsEngine Engine() => new(_dns, [_cloudflare], _prober, new FakeProxy(), () => _hosts, TestOptions.Fast);
 
     private async Task<DiagnosisReport> Diagnose(CancellationToken ct)
     {

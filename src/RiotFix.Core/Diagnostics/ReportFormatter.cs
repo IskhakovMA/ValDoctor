@@ -32,6 +32,13 @@ public static class ReportFormatter
                 sb.Append("  Адрес задан в hosts: ").AppendLine(d.Override == HostsOverride.RiotFixPin ? "запись RiotFix" : "сторонняя запись");
             }
 
+            if (d.DnsRetried)
+            {
+                sb.AppendLine(d.SystemDns.Success
+                    ? "  Системный DNS ответил не сразу: ответ получен после повторного запроса."
+                    : "  Системный DNS не ответил и после повторных запросов.");
+            }
+
             sb.Append("  Системный DNS: ").AppendLine(d.SystemDns.Success
                 ? string.Join(", ", d.SystemDns.Addresses)
                 : Texts.Dns(d.SystemDns.Failure));
