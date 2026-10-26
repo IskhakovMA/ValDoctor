@@ -31,6 +31,34 @@
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Margin="0,20,0,0">
       <StackPanel Margin="28,0,28,8">
 
+        <!-- Update notice: shown only when GitHub Releases has a newer version the user has not dismissed -->
+        <Border Background="{DynamicResource AccentSoft}" CornerRadius="8" Padding="14,10,8,10" Margin="0,0,0,12"
+                Visibility="{Binding HasUpdate, Converter={StaticResource BoolToVisibility}}">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="{Binding UpdateHeadline}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock Text="{Binding UpdateSummary}" FontSize="12" Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <Button Grid.Column="1" Style="{StaticResource LinkButton}" Content="Скачать" Command="{Binding DownloadUpdateCommand}"
+                    VerticalAlignment="Center" Margin="12,0,10,0" ToolTip="Открыть страницу релиза на GitHub" />
+            <Button Grid.Column="2" Command="{Binding DismissUpdateCommand}" VerticalAlignment="Center" Cursor="Hand"
+                    ToolTip="Скрыть уведомление" AutomationProperties.Name="Скрыть уведомление" FocusVisualStyle="{StaticResource FocusRing}">
+              <Button.Template>
+                <ControlTemplate TargetType="Button">
+                  <Border Background="Transparent" Padding="6">
+                    <TextBlock Text="&#xE711;" FontFamily="{StaticResource IconFont}" FontSize="10" Foreground="{DynamicResource TextMuted}" />
+                  </Border>
+                </ControlTemplate>
+              </Button.Template>
+            </Button>
+          </Grid>
+        </Border>
+
         <!-- Status -->
         <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="8" Padding="20,18">
           <StackPanel>

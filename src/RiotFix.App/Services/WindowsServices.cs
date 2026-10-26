@@ -7,6 +7,7 @@ using Microsoft.Win32;
 using RiotFix.Core.Elevation;
 using RiotFix.Core.Hosts;
 using RiotFix.Core.Logging;
+using RiotFix.Core.Updates;
 
 namespace RiotFix.App.Services;
 
@@ -17,8 +18,13 @@ internal static class AppInfo
 
     public const string RepositoryUrl = "https://github.com/IskhakovMA/riotfix";
 
-    public static string LogDirectory { get; } =
-        Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RiotFix", "logs");
+    public static SemVersion SemanticVersion { get; } =
+        typeof(AppInfo).Assembly.GetName().Version is { } v ? SemVersion.Create(v.Major, v.Minor, v.Build) : SemVersion.Create(0, 0, 0);
+
+    public static string DataDirectory { get; } =
+        Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RiotFix");
+
+    public static string LogDirectory { get; } = Path.Join(DataDirectory, "logs");
 }
 
 internal static class HostsLocator
@@ -31,30 +37,18 @@ internal static class HostsLocator
     /// </summary>
     public static string GetHostsPath()
     {
-        var standard = Path.Join(Environment.SystemDirectory, "drivers", "etc", "hosts");
+        string? raw = null;
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters");
-            if (key?.GetValue("DataBasePath", null, RegistryValueOptions.DoNotExpandEnvironmentNames) is string raw)
-            {
-                var value = raw.Trim().TrimEnd('\\');
-                if (string.Equals(value, @"%SystemRoot%\System32\drivers\etc", StringComparison.OrdinalIgnoreCase))
-                {
-                    return standard;
-                }
-
-                if (!value.Contains('%', StringComparison.Ordinal) && Path.IsPathFullyQualified(value) &&
-                    !value.StartsWith(@"\\", StringComparison.Ordinal))
-                {
-                    return Path.Join(value, "hosts");
-                }
-            }
+            raw = key?.GetValue("DataBasePath", null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
         }
         catch (Exception ex) when (ex is System.Security.SecurityException or IOException or UnauthorizedAccessException)
         {
         }
 
-        return standard;
+        // Environment.SystemDirectory comes from GetSystemDirectoryW, not from environment variables.
+        return HostsPathPolicy.Resolve(raw, Environment.SystemDirectory);
     }
 }
 

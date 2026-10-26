@@ -16,7 +16,7 @@ public sealed record DiagnosticsOptions
     /// <summary>Upper bound of alternative addresses tried per host. Keeps the search bounded — no brute force.</summary>
     public int MaxCandidatesPerHost { get; init; } = 6;
 
-    public int MaxParallelProbes { get; init; } = 6;
+    public int MaxParallelProbes { get; init; } = 8;
 
     public TimeSpan DnsTimeout { get; init; } = TimeSpan.FromSeconds(8);
 
@@ -108,12 +108,13 @@ public sealed class DiagnosticsEngine
             hosts?.HasRiotFixContent ?? false,
             hosts?.GetPins() ?? [],
             plan,
-            verdict);
+            verdict,
+            hosts is null ? null : HostsFingerprint.Of(hosts));
     }
 
     internal static Verdict DetermineVerdict(IReadOnlyList<DomainDiagnosis> domains, FixPlan plan)
     {
-        if (domains.All(d => d.Health == DomainHealth.Healthy))
+        if (domains.All(d => d.IsReachable))
         {
             return Verdict.AllHealthy;
         }
@@ -130,9 +131,13 @@ public sealed class DiagnosticsEngine
             return Verdict.NoConnectivity;
         }
 
-        return domains.Where(d => d.Health != DomainHealth.Healthy).All(d => d.Health == DomainHealth.ServerError)
-            ? Verdict.ServiceErrors
-            : Verdict.ProblemsWithoutFix;
+        var notReachable = domains.Where(d => !d.IsReachable).ToList();
+        if (notReachable.All(d => d.Health == DomainHealth.ServerError))
+        {
+            return Verdict.ServiceErrors;
+        }
+
+        return notReachable.All(d => !d.IsEssential) ? Verdict.LimitedConnectivity : Verdict.ProblemsWithoutFix;
     }
 
     internal static DomainHealth Classify(SystemDnsAnswer dns, IReadOnlyList<ProbeResult> probes)
@@ -142,22 +147,29 @@ public sealed class DiagnosticsEngine
             return DomainHealth.Failed;
         }
 
-        if (probes[0].Healthy)
+        // The order of addresses is not stable (DNS round-robin), so every address counts, not just the first.
+        var anyHealthy = probes.Any(p => p.Healthy);
+
+        // "No IPv6 route" while another address works is harmless: the OS uses IPv4 immediately.
+        var relevant = probes.Where(p => !(anyHealthy &&
+            p.Address.AddressFamily == AddressFamily.InterNetworkV6 && p.Failure == ProbeFailure.NetworkUnreachable)).ToList();
+        var failing = relevant.Where(p => !p.Healthy).ToList();
+        if (failing.Count == 0)
         {
             return DomainHealth.Healthy;
         }
 
-        var anyHealthy = probes.Any(p => p.Healthy);
         if (anyHealthy)
         {
-            // Failures that are only "no IPv6 route" are harmless: the OS falls back to IPv4 immediately.
-            var onlyIpv6Unreachable = probes.Where(p => !p.Healthy).All(p =>
-                p.Address.AddressFamily == AddressFamily.InterNetworkV6 && p.Failure == ProbeFailure.NetworkUnreachable);
-            return onlyIpv6Unreachable ? DomainHealth.Healthy : DomainHealth.Degraded;
+            // Addresses that fail instantly at connect time are skipped by the client right away.
+            return failing.All(p => IsFastConnectFailure(p.Failure)) ? DomainHealth.PartiallyReachable : DomainHealth.Degraded;
         }
 
-        return probes.Any(p => p.Reachable) ? DomainHealth.ServerError : DomainHealth.Failed;
+        return relevant.Any(p => p.Reachable) ? DomainHealth.ServerError : DomainHealth.Failed;
     }
+
+    internal static bool IsFastConnectFailure(ProbeFailure failure) =>
+        failure is ProbeFailure.TcpRefused or ProbeFailure.TcpReset or ProbeFailure.NetworkUnreachable or ProbeFailure.NotPublicAddress;
 
     private async Task<DomainDiagnosis> DiagnoseAsync(
         RiotService service,

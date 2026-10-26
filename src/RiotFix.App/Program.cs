@@ -52,7 +52,10 @@ internal static class Program
 
         log.Info($"RiotFix {AppInfo.Version} started (elevated: {ElevationService.IsAdministrator()}).");
         var window = new MainWindow();
-        window.DataContext = new MainViewModel(AppComposition.Create(log), new MessageBoxDialogs(window));
+        var composition = AppComposition.Create(log);
+        var viewModel = new MainViewModel(composition, new MessageBoxDialogs(window));
+        window.DataContext = viewModel;
+        window.ContentRendered += (_, _) => viewModel.StartUpdateCheck(composition.CreateUpdateChecker());
         return app.Run(window);
     }
 
