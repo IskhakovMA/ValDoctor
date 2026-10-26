@@ -12,6 +12,7 @@ using RiotFix.Core.Diagnostics;
 using RiotFix.Core.Hosts;
 using RiotFix.Core.Logging;
 using RiotFix.Core.Network;
+using RiotFix.Core.Updates;
 
 namespace RiotFix.App;
 
@@ -65,9 +66,19 @@ internal static class SmokeTest
             vm.ShowReport(fix, Texts.ForReport(fix));
             Render(window, outputDir, "05-dark-fix-available.png");
 
+            var limited = SampleData.Limited();
+            vm.ShowReport(limited, Texts.ForReport(limited));
+            vm.ShowUpdate(new ReleaseInfo(SemVersion.Create(9, 9, 9), "v9.9.9", "RiotFix v9.9.9", "Пример уведомления об обновлении (smoke test)",
+                UpdateChecker.ReleaseUrl("v9.9.9"), true));
+            Render(window, outputDir, "06-dark-limited-update.png");
+            vm.ShowUpdate(null);
+
             window.Width = 460;
             window.Height = 520;
-            Render(window, outputDir, "06-dark-min-size.png");
+            Render(window, outputDir, "07-dark-min-size.png");
+
+            ThemeManager.Apply(app, dark: false);
+            Render(window, outputDir, "08-light-min-size.png");
 
             File.WriteAllText(Path.Join(outputDir, "smoke-ok.txt"), $"RiotFix {AppInfo.Version} smoke test passed");
             window.Close();
@@ -153,6 +164,22 @@ internal static class SampleData
         return Report(domains, Verdict.FixAvailable);
     }
 
+    /// <summary>The state seen on the real affected PC: essential services fine, account/data TLS timeout, no fix.</summary>
+    public static DiagnosisReport Limited()
+    {
+        var all = RiotServices.All;
+        var domains = new List<DomainDiagnosis>
+        {
+            Healthy(all[0], "104.16.120.50"),
+            Broken(all[1], "104.16.56.40", ProbeFailure.TlsTimeout, candidate: null),
+            Healthy(all[2], "104.18.157.37"),
+            Healthy(all[3], "104.16.56.21"),
+            Broken(all[4], "104.16.56.40", ProbeFailure.TlsTimeout, candidate: null),
+            Healthy(all[5], "104.18.36.199"),
+        };
+        return Report(domains, Verdict.LimitedConnectivity);
+    }
+
     private static DiagnosisReport Report(List<DomainDiagnosis> domains, Verdict verdict) =>
         new(DateTimeOffset.Now, TimeSpan.FromSeconds(3.2), domains, false, true, false, [],
             FixPlanner.Create(domains, HostsDocument.Empty()), verdict);
@@ -162,7 +189,7 @@ internal static class SampleData
 
     private static DomainDiagnosis Broken(RiotService s, string ip, ProbeFailure failure, string? candidate)
     {
-        var probe = new ProbeResult(IPAddress.Parse(ip), failure == ProbeFailure.TlsReset ? ProbeStage.TcpConnected : ProbeStage.None, failure, TimeSpan.FromSeconds(5));
+        var probe = new ProbeResult(IPAddress.Parse(ip), failure is ProbeFailure.TlsReset or ProbeFailure.TlsTimeout ? ProbeStage.TcpConnected : ProbeStage.None, failure, TimeSpan.FromSeconds(5));
         var trustedIps = candidate is null ? [ip] : new[] { ip, candidate };
         var trusted = new List<TrustedDnsAnswer>
         {

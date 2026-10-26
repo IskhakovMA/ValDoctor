@@ -7,10 +7,19 @@ namespace RiotFix.Core.Diagnostics;
 
 public enum DomainHealth
 {
-    /// <summary>The address the system resolves first works end-to-end (DNS → TCP → TLS → HTTP status &lt; 500).</summary>
+    /// <summary>Every relevant resolved address works end-to-end (DNS → TCP → TLS → HTTP status &lt; 500).</summary>
     Healthy,
 
-    /// <summary>Some resolved addresses work but the preferred one does not.</summary>
+    /// <summary>
+    /// Some addresses work; the others fail immediately at connect time (refused / no route / reset).
+    /// Clients move on to the next address at once, so this is not treated as a problem.
+    /// </summary>
+    PartiallyReachable,
+
+    /// <summary>
+    /// Some addresses work, others fail slowly (TCP timeout) or after connecting (TLS/HTTPS). DNS rotates the
+    /// address order, so a client regularly lands on a bad address. A verified pin removes that.
+    /// </summary>
     Degraded,
 
     /// <summary>The server is reachable over validated TLS but answers with HTTP 5xx. Not a local network problem.</summary>
@@ -50,6 +59,11 @@ public sealed record DomainDiagnosis(
     public string Host => Service.Host;
 
     public bool NeedsFix => Health is DomainHealth.Degraded or DomainHealth.Failed;
+
+    /// <summary>Network-level OK: the client can reach the service (possibly after skipping a dead address).</summary>
+    public bool IsReachable => Health is DomainHealth.Healthy or DomainHealth.PartiallyReachable;
+
+    public bool IsEssential => Service.Role == ServiceRole.Essential;
 
     public CandidateEvidence? BestCandidate => Candidates
         .Where(c => c.Verified)
@@ -109,6 +123,9 @@ public enum Verdict
     ProblemsWithoutFix,
     ServiceErrors,
     NoConnectivity,
+
+    /// <summary>All essential services are reachable; only auxiliary ones are not, and no verified fix exists.</summary>
+    LimitedConnectivity,
 }
 
 public sealed record DiagnosisReport(
@@ -120,9 +137,12 @@ public sealed record DiagnosisReport(
     bool HasRiotFixContent,
     IReadOnlyList<HostPin> CurrentPins,
     FixPlan Plan,
-    Verdict Verdict)
+    Verdict Verdict,
+    string? HostsFingerprint = null)
 {
-    public int HealthyCount => Domains.Count(d => d.Health == DomainHealth.Healthy);
+    public int HealthyCount => Domains.Count(d => d.IsReachable);
+
+    public bool EssentialReachable => Domains.Where(d => d.IsEssential).All(d => d.IsReachable);
 }
 
 public sealed record DiagnosisProgress(int Completed, int Total, string Message);

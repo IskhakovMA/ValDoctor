@@ -11,7 +11,7 @@
     <DebugType>embedded</DebugType>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
 
-    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <Version Condition="'$(Version)' == ''">0.2.0</Version>
     <Product>RiotFix</Product>
     <Company>RiotFix contributors</Company>
     <Authors>RiotFix contributors</Authors>

@@ -44,21 +44,35 @@ public static class Texts
     {
         ArgumentNullException.ThrowIfNull(report);
         var total = report.Domains.Count;
-        var broken = report.Domains.Count(d => d.NeedsFix);
+        var unreachable = report.Domains.Where(d => !d.IsReachable).ToList();
+        var essentialDown = unreachable.Where(d => d.IsEssential).ToList();
+        var partial = report.Domains.Count(d => d.Health == DomainHealth.PartiallyReachable);
+        var partialNote = partial > 0
+            ? $" У {partial} {Plural(partial, "сервиса", "сервисов", "сервисов")} часть адресов сразу отклоняет соединение, но рабочие адреса есть — клиент обычно сразу переходит к ним."
+            : string.Empty;
 
         return report.Verdict switch
         {
             Verdict.AllHealthy => new(StatusTone.Success, "Подключение в порядке",
-                $"Все {Services(total)} Riot отвечают. {ScopeNote}"),
-            Verdict.FixAvailable => new(StatusTone.Warning, "Найдены проблемы с подключением",
-                $"Не отвечают {broken} из {Services(total)}. Для {report.Plan.NewPins.Count} из них найден проверенный рабочий адрес." +
+                $"Все {Services(total)} Riot отвечают по сети.{partialNote} {ScopeNote}"),
+            Verdict.FixAvailable => new(StatusTone.Warning,
+                essentialDown.Count > 0 ? "Найдены проблемы с подключением" : "Основные сервисы отвечают, есть ограничения",
+                $"Проблемы с подключением у {unreachable.Count} из {Services(total)}" +
+                (essentialDown.Count == 0 ? " (только вспомогательные)" : string.Empty) +
+                $". Для {report.Plan.NewPins.Count} найден проверенный рабочий адрес." +
                 (report.Plan.Unfixable.Count > 0
                     ? $" Для {report.Plan.Unfixable.Count} {Plural(report.Plan.Unfixable.Count, "сервиса", "сервисов", "сервисов")} безопасного исправления нет."
                     : string.Empty) +
-                " Нажмите «Исправить», чтобы RiotFix добавил записи в файл hosts."),
+                (essentialDown.Count == 0
+                    ? " Если Riot Client у вас работает, исправление не обязательно."
+                    : " Нажмите «Исправить», чтобы RiotFix добавил записи в файл hosts.")),
+            Verdict.LimitedConnectivity => new(StatusTone.Warning, "Основные сервисы отвечают",
+                $"Основные сервисы (вход, настройки клиента, доступ к играм) отвечают. Проблемы у вспомогательных: {HostList(unreachable)}. " +
+                $"{NoFixReason(report)} " +
+                "Недоступность этих сервисов не всегда мешает входу: известен случай, когда вход и игра работали в такой же ситуации."),
             Verdict.ProblemsWithoutFix => new(StatusTone.Error, "Найдены проблемы, исправления нет",
-                $"Не отвечают {broken} из {Services(total)}. RiotFix не нашёл адрес, который прошёл бы проверку, поэтому файл hosts изменён не будет. " +
-                "Возможные причины: блокировка на уровне провайдера, которую не обходит смена адреса, или временный сбой сервисов."),
+                $"Проблемы с подключением у {unreachable.Count} из {Services(total)}: {HostList(unreachable)}. {NoFixReason(report)} " +
+                "Это сетевая проверка: она не доказывает, что вход невозможен. Возможные причины — блокировка, которую не обходит смена адреса, или временный сбой сервисов."),
             Verdict.ServiceErrors => new(StatusTone.Warning, "Сервисы отвечают с ошибками",
                 "Серверы Riot доступны по сети, но возвращают ошибки (HTTP 5xx). Скорее всего, это проблема на стороне Riot Games — изменение hosts здесь не поможет."),
             Verdict.NoConnectivity => new(StatusTone.Error, "Нет подключения к интернету",
@@ -67,36 +81,68 @@ public static class Texts
         };
     }
 
-    /// <summary>Outcome after applying a fix, based only on the re-check that followed it.</summary>
+    /// <summary>
+    /// Outcome after applying a fix, based only on the re-check that followed it. Never recommends an automatic
+    /// rollback just because some services still fail: on a real PC sign-in and a game worked in exactly that state.
+    /// </summary>
     public static StatusMessage AfterFix(DiagnosisReport after, IReadOnlyCollection<HostPin> applied)
     {
         ArgumentNullException.ThrowIfNull(after);
         ArgumentNullException.ThrowIfNull(applied);
         var total = after.Domains.Count;
-        var healthy = after.HealthyCount;
+        var reachable = after.HealthyCount;
         var appliedHosts = applied.Select(p => p.Host).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var stillBrokenPinned = after.Domains.Where(d => appliedHosts.Contains(d.Host) && d.Health != DomainHealth.Healthy).ToList();
-        var stillBroken = after.Domains.Where(d => d.Health != DomainHealth.Healthy).ToList();
+        var stillDown = after.Domains.Where(d => !d.IsReachable).ToList();
+        var pinnedStillDown = stillDown.Where(d => appliedHosts.Contains(d.Host)).ToList();
 
-        if (stillBroken.Count == 0)
+        if (stillDown.Count == 0)
         {
             return new(StatusTone.Success, "Исправление применено",
                 $"Повторная проверка: отвечают все {Services(total)}. Перезапустите Riot Client, чтобы он подключился заново. {ScopeNote}");
         }
 
-        if (stillBrokenPinned.Count == applied.Count && applied.Count > 0)
+        if (applied.Count > 0 && pinnedStillDown.Count == applied.Count)
         {
-            return new(StatusTone.Error, "Исправление не помогло",
-                $"Повторная проверка: отвечают {healthy} из {Services(total)}. Добавленные записи не дали результата — рекомендуем нажать «Отменить изменения».");
+            return new(StatusTone.Warning, "Исправление не дало результата",
+                $"Повторная проверка: отвечают {reachable} из {Services(total)}. Сервисы с новыми записями по-прежнему не отвечают: {HostList(pinnedStillDown)}. " +
+                "Перезапустите Riot Client и попробуйте войти. Если вход не работает, отмените изменения кнопкой «Отменить изменения».");
+        }
+
+        if (after.EssentialReachable)
+        {
+            return new(StatusTone.Success, "Исправление применено",
+                $"Повторная проверка: основные сервисы входа отвечают ({reachable} из {Services(total)}). " +
+                $"Не отвечают вспомогательные: {HostList(stillDown)} — это не всегда мешает входу. Перезапустите Riot Client и попробуйте войти.");
         }
 
         return new(StatusTone.Warning, "Исправление применено частично",
-            $"Повторная проверка: отвечают {healthy} из {Services(total)}. Не отвечают: {string.Join(", ", stillBroken.Select(d => d.Host))}. Перезапустите Riot Client.");
+            $"Повторная проверка: отвечают {reachable} из {Services(total)}. Не отвечают: {HostList(stillDown)}. " +
+            "Перезапустите Riot Client и попробуйте войти — сетевая проверка не всегда совпадает с работой клиента.");
+    }
+
+    private static string HostList(IEnumerable<DomainDiagnosis> domains) => string.Join(", ", domains.Select(d => d.Host));
+
+    /// <summary>Why the hosts file is not changed, from the planner's actual reasons.</summary>
+    private static string NoFixReason(DiagnosisReport report)
+    {
+        var reasons = report.Plan.Unfixable.Select(u => u.Reason).ToHashSet();
+        if (reasons.Contains(UnfixableReason.HostsUnreadable))
+        {
+            return "Файл hosts не удалось прочитать, поэтому RiotFix его не изменяет.";
+        }
+
+        if (reasons.Contains(UnfixableReason.ConflictCannotBeDisabled) && !reasons.Contains(UnfixableReason.NoVerifiedCandidate))
+        {
+            return "В файле hosts есть сторонняя строка, которая затрагивает и другие сайты, — RiotFix её не трогает и hosts не изменяет.";
+        }
+
+        return "Адреса, который прошёл бы проверку, не найдено, поэтому файл hosts изменён не будет.";
     }
 
     public static string Health(DomainHealth health) => health switch
     {
         DomainHealth.Healthy => "Доступен",
+        DomainHealth.PartiallyReachable => "Доступен (не все адреса)",
         DomainHealth.Degraded => "Работает нестабильно",
         DomainHealth.ServerError => "Отвечает с ошибкой",
         DomainHealth.Failed => "Недоступен",

@@ -90,8 +90,9 @@ public class DiagnosticsEngineTests
     [Fact]
     public async Task Degraded_host_is_pinned_to_its_working_system_address()
     {
+        // A TCP timeout is a slow failure: clients that land on this address hang before falling back.
         _dns.Set(Auth, "104.16.1.1", "104.16.9.9");
-        _prober.Fails(Auth, "104.16.1.1", ProbeFailure.TcpReset).Ok(Auth, "104.16.9.9");
+        _prober.Fails(Auth, "104.16.1.1", ProbeFailure.TcpTimeout).Ok(Auth, "104.16.9.9");
 
         var report = await Run(AuthService);
 

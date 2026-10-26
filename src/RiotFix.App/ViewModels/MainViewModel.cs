@@ -12,6 +12,7 @@ using RiotFix.Core.Elevation;
 using RiotFix.Core.Hosts;
 using RiotFix.Core.Logging;
 using RiotFix.Core.Network;
+using RiotFix.Core.Updates;
 
 namespace RiotFix.App.ViewModels;
 
@@ -21,6 +22,15 @@ internal sealed record ServiceRow(string DisplayName, string Host, string Status
 internal sealed class AppComposition
 {
     private static readonly HttpClient DohHttp = new(DohResolver.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
+
+    private static readonly HttpClient UpdateHttp = new(new SocketsHttpHandler
+    {
+        ConnectTimeout = TimeSpan.FromSeconds(4),
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        AutomaticDecompression = System.Net.DecompressionMethods.All,
+    })
+    { Timeout = TimeSpan.FromSeconds(6) };
 
     private AppComposition(IRiotFixLog log, HostsFileService hosts)
     {
@@ -38,12 +48,23 @@ internal sealed class AppComposition
     public static AppComposition Create(IRiotFixLog log) =>
         new(log, new HostsFileService(new PhysicalFileSystem(), HostsLocator.GetHostsPath(), log));
 
+    public IEndpointProber Prober { get; } = new TlsEndpointProber(new ProbeOptions { UserAgent = $"RiotFix/{AppInfo.Version} (connectivity check)" });
+
     public DiagnosticsEngine CreateEngine() => new(
         new SystemResolver(),
         TrustedResolvers.Defaults.Select(d => (ITrustedResolver)new DohResolver(d, DohHttp, TimeSpan.FromSeconds(4))).ToList(),
-        new TlsEndpointProber(new ProbeOptions { UserAgent = $"RiotFix/{AppInfo.Version} (connectivity check)" }),
+        Prober,
         new SystemProxyDetector(),
         Hosts.Load,
+        log: Log);
+
+    public FixPreflight CreatePreflight(Func<CancellationToken, Task<DiagnosisReport>> diagnose) =>
+        new(diagnose, Prober, Hosts.Load, log: Log);
+
+    public UpdateChecker CreateUpdateChecker() => new(
+        UpdateHttp,
+        new FileUpdateStateStore(Path.Join(AppInfo.DataDirectory, "update-state.json")),
+        AppInfo.SemanticVersion,
         log: Log);
 }
 
@@ -64,6 +85,8 @@ internal sealed class MainViewModel : ObservableObject
     private bool _hasChecked;
     private bool _canRevert;
     private string _details = "Проверка ещё не выполнялась.";
+    private ReleaseInfo? _update;
+    private UpdateChecker? _updateChecker;
 
     public MainViewModel(AppComposition app, IDialogs dialogs)
     {
@@ -76,6 +99,14 @@ internal sealed class MainViewModel : ObservableObject
         CopyReportCommand = new RelayCommand(CopyReport);
         OpenLogsCommand = new RelayCommand(OpenLogs);
         OpenRepositoryCommand = new RelayCommand(() => OpenUrl(AppInfo.RepositoryUrl));
+        DownloadUpdateCommand = new RelayCommand(() =>
+        {
+            if (_update is not null)
+            {
+                OpenUrl(_update.Url.AbsoluteUri);
+            }
+        });
+        DismissUpdateCommand = new RelayCommand(DismissUpdate);
         RefreshHostsState();
         if (CanRevert)
         {
@@ -96,6 +127,47 @@ internal sealed class MainViewModel : ObservableObject
     public RelayCommand OpenLogsCommand { get; }
 
     public RelayCommand OpenRepositoryCommand { get; }
+
+    public RelayCommand DownloadUpdateCommand { get; }
+
+    public RelayCommand DismissUpdateCommand { get; }
+
+    public bool HasUpdate => _update is not null;
+
+    public string UpdateHeadline => _update is null ? string.Empty : $"Доступна новая версия {_update.Version}";
+
+    public string UpdateSummary => _update is null ? string.Empty
+        : string.IsNullOrEmpty(_update.Summary) ? _update.Title : _update.Summary;
+
+    /// <summary>
+    /// Non-blocking update check (at most once per 24 h, silent on any failure). Only reads GitHub Releases;
+    /// nothing is downloaded or started.
+    /// </summary>
+    public async void StartUpdateCheck(UpdateChecker checker)
+    {
+        _updateChecker = checker;
+        try
+        {
+            var release = await Task.Run(() => checker.CheckAsync(CancellationToken.None));
+            if (release is not null)
+            {
+                ShowUpdate(release);
+            }
+        }
+        catch (Exception ex)
+        {
+            _app.Log.Info($"Update check failed silently: {ex.GetType().Name}.");
+        }
+    }
+
+    /// <summary>Also used by the smoke test.</summary>
+    public void ShowUpdate(ReleaseInfo? release)
+    {
+        _update = release;
+        OnPropertyChanged(nameof(HasUpdate));
+        OnPropertyChanged(nameof(UpdateHeadline));
+        OnPropertyChanged(nameof(UpdateSummary));
+    }
 
     public ObservableCollection<ServiceRow> Services { get; } = [];
 
@@ -185,11 +257,13 @@ internal sealed class MainViewModel : ObservableObject
         Services.Clear();
         foreach (var d in report.Domains)
         {
+            var hasFix = report.Plan.NewPins.Any(p => p.Host == d.Host);
             var (text, tone) = d.Health switch
             {
-                DomainHealth.Healthy => (Texts.Health(d.Health), StatusTone.Success),
+                DomainHealth.Healthy or DomainHealth.PartiallyReachable => (Texts.Health(d.Health), StatusTone.Success),
                 DomainHealth.ServerError => (Texts.Health(d.Health), StatusTone.Warning),
-                _ when report.Plan.NewPins.Any(p => p.Host == d.Host) => ($"{Texts.Health(d.Health)} · есть исправление", d.Health == DomainHealth.Degraded ? StatusTone.Warning : StatusTone.Error),
+                _ when hasFix => ($"{Texts.Health(d.Health)} · есть исправление", d.Health == DomainHealth.Degraded || !d.IsEssential ? StatusTone.Warning : StatusTone.Error),
+                _ when !d.IsEssential => ($"{Texts.Health(d.Health)} · вспомогательный", StatusTone.Warning),
                 _ => (Texts.Health(d.Health), d.Health == DomainHealth.Degraded ? StatusTone.Warning : StatusTone.Error),
             };
             Services.Add(new ServiceRow(d.Service.DisplayName, d.Host, text, tone));
@@ -212,17 +286,26 @@ internal sealed class MainViewModel : ObservableObject
 
     private async Task FixAsync()
     {
-        if (_report is not { Plan.HasChanges: true } report)
+        if (_report is not { Plan.HasChanges: true })
         {
             return;
         }
 
-        var plan = report.Plan;
-        if (!_dialogs.Confirm("Исправить подключение", BuildFixConfirmation(plan)))
+        // 1. Before asking anything: is the result still valid? (age, hosts unchanged, addresses still answer)
+        var ready = await PreflightAsync();
+        if (ready is null || !_dialogs.Confirm("Исправить подключение", BuildFixConfirmation(ready.Plan)))
         {
             return;
         }
 
+        // 2. The dialog may have been open for a while: re-check once more right before requesting UAC.
+        ready = await PreflightAsync();
+        if (ready is null)
+        {
+            return;
+        }
+
+        var plan = ready.Plan;
         await RunBusyAsync("Ожидаем разрешения администратора…", cancellable: false, async ct =>
         {
             var outcome = await _app.Elevation.RunAsync(ElevatedRequest.Apply(plan.DesiredPins, plan.RequiresConflictConsent));
@@ -232,6 +315,7 @@ internal sealed class MainViewModel : ObservableObject
             }
 
             // The re-check is not cancellable: the hosts file has already changed and the user must see the real result.
+            // No automatic rollback: on a real PC sign-in and the game worked while some services still failed.
             ProgressText = "Проверяем результат…";
             await FlushDnsAsync();
             await Task.Delay(TimeSpan.FromMilliseconds(700), ct);
@@ -254,6 +338,51 @@ internal sealed class MainViewModel : ObservableObject
                 ? Texts.ForReport(after) with { Headline = "Записи уже были в файле hosts" }
                 : Texts.AfterFix(after, plan.NewPins));
         });
+    }
+
+    /// <summary>Returns a report whose plan is still confirmed, or null (and shows why) when nothing should be written.</summary>
+    private async Task<DiagnosisReport?> PreflightAsync()
+    {
+        DiagnosisReport? ready = null;
+        await RunBusyAsync("Проверяем, что найденные адреса всё ещё работают…", cancellable: true, async ct =>
+        {
+            var preflight = _app.CreatePreflight(RunDiagnosisAsync);
+            var result = await preflight.CheckAsync(_report!, ct);
+            switch (result.Status)
+            {
+                case PreflightStatus.Ready:
+                    if (!ReferenceEquals(result.Report, _report))
+                    {
+                        ShowReport(result.Report, Texts.ForReport(result.Report));
+                    }
+
+                    ready = result.Report;
+                    break;
+                case PreflightStatus.PlanChanged:
+                    ShowReport(result.Report, new StatusMessage(StatusTone.Warning, "Результат проверки изменился",
+                        "Перед исправлением RiotFix проверил подключение ещё раз, и найденные адреса изменились. Файл hosts не изменён. " +
+                        "Посмотрите новый результат и нажмите «Исправить» ещё раз."));
+                    break;
+                default:
+                    var message = Texts.ForReport(result.Report);
+                    ShowReport(result.Report, message with
+                    {
+                        Body = "Повторная проверка перед исправлением: подтверждённого исправления больше нет, файл hosts не изменён. " + message.Body,
+                    });
+                    break;
+            }
+        });
+        return ready;
+    }
+
+    private void DismissUpdate()
+    {
+        if (_update is not null)
+        {
+            _updateChecker?.Dismiss(_update);
+        }
+
+        ShowUpdate(null);
     }
 
     private async Task RevertAsync()
@@ -290,7 +419,9 @@ internal sealed class MainViewModel : ObservableObject
 
     private async Task<DiagnosisReport> RunDiagnosisAsync(CancellationToken ct)
     {
-        var progress = new Progress<DiagnosisProgress>(p => ProgressText = p.Message);
+        // May be called from a thread-pool continuation (preflight): always marshal progress to the UI thread.
+        var dispatcher = Application.Current.Dispatcher;
+        var progress = new Progress<DiagnosisProgress>(p => dispatcher.BeginInvoke(() => ProgressText = p.Message));
         var engine = _app.CreateEngine();
         return await Task.Run(() => engine.RunAsync(RiotServices.All, progress, ct), ct);
     }

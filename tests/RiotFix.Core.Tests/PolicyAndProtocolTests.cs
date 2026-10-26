@@ -181,13 +181,15 @@ public class TextsTests
         Assert.Equal(StatusTone.Success, ok.Tone);
         Assert.Contains("не гарантирует", ok.Body, StringComparison.Ordinal);
 
+        // A pinned host that still fails is reported, but rollback is only suggested if sign-in does not work.
         var failed = Texts.AfterFix(Report(Verdict.ProblemsWithoutFix, Domain("auth.riotgames.com", DomainHealth.Failed)), [pin]);
-        Assert.Equal(StatusTone.Error, failed.Tone);
+        Assert.Equal(StatusTone.Warning, failed.Tone);
+        Assert.Contains("Если вход не работает", failed.Body, StringComparison.Ordinal);
         Assert.Contains("Отменить изменения", failed.Body, StringComparison.Ordinal);
 
         var partial = Texts.AfterFix(Report(Verdict.ProblemsWithoutFix,
-            Domain("auth.riotgames.com", DomainHealth.Healthy), Domain("account.riotgames.com", DomainHealth.Failed)), [pin]);
+            Domain("auth.riotgames.com", DomainHealth.Healthy), Domain("clientconfig.rpg.riotgames.com", DomainHealth.Failed)), [pin]);
         Assert.Equal(StatusTone.Warning, partial.Tone);
-        Assert.Contains("account.riotgames.com", partial.Body, StringComparison.Ordinal);
+        Assert.Contains("clientconfig.rpg.riotgames.com", partial.Body, StringComparison.Ordinal);
     }
 }
