@@ -24,7 +24,9 @@ internal static class Program
             return (int)ElevatedRunner.Run(args, hosts, DnsCache.Flush, NullLog.Instance);
         }
 
-        var log = new FileLog(AppInfo.LogDirectory);
+        // Running elevated (e.g. "Run as administrator"): write nothing into the user-writable profile, where a
+        // same-user program could redirect elevated file writes/deletes with junctions or symlinks.
+        IAppLog log = ElevationService.IsAdministrator() ? NullLog.Instance : new FileLog(AppInfo.LogDirectory);
 
         // 2. Read-only network self-check used by CI on a real Windows runner. Never modifies hosts.
         if (args is ["--self-check", var reportPath])
@@ -59,7 +61,7 @@ internal static class Program
         return app.Run(window);
     }
 
-    private static int SelfCheck(string reportPath, FileLog log)
+    private static int SelfCheck(string reportPath, IAppLog log)
     {
         try
         {

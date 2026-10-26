@@ -12,6 +12,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\ValDoctor.ico</ApplicationIcon>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Security: the elevated helper inherits the user's environment (HKCU\Environment is user-writable).
+         Ignore DOTNET_STARTUP_HOOKS so no assembly can be injected into it before Main. -->
+    <StartupHookSupport>false</StartupHookSupport>
     <SatelliteResourceLanguages>ru</SatelliteResourceLanguages>
     <!-- Publish settings (used with: dotnet publish -r win-x64) -->
     <SelfContained>false</SelfContained>

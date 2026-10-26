@@ -186,6 +186,12 @@ public sealed class UpdateChecker
         return string.Empty;
     }
 
+    private static string CleanTitle(string? title, string tag)
+    {
+        var cleaned = Clean(title, 80);
+        return string.IsNullOrEmpty(cleaned) ? $"ValDoctor {tag}" : cleaned;
+    }
+
     private static string Clean(string? text, int max)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -214,7 +220,8 @@ public sealed class UpdateChecker
 
     private static ReleaseInfo? FromState(UpdateState state) =>
         state.LatestTag is { } tag && SemVersion.TryParse(tag, out var v) && tag.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '+')
-            ? new ReleaseInfo(v, tag, state.LatestTitle ?? $"ValDoctor {tag}", state.LatestSummary ?? string.Empty, ReleaseUrl(tag), state.LatestPrerelease)
+            // The state file is user-writable: apply the same cleaning and length limits as for GitHub data.
+            ? new ReleaseInfo(v, tag, CleanTitle(state.LatestTitle, tag), Summary(state.LatestSummary), ReleaseUrl(tag), state.LatestPrerelease)
             : null;
 
     private async Task<ReleaseInfo?> FetchLatestAsync(CancellationToken cancellationToken)
@@ -307,6 +314,16 @@ public sealed class UpdateChecker
             _log.Warn($"Update state could not be saved ({ex.GetType().Name}).");
         }
     }
+}
+
+/// <summary>Keeps the update state for the current run only (used when nothing may be written to disk).</summary>
+public sealed class MemoryUpdateStateStore : IUpdateStateStore
+{
+    private UpdateState _state = new();
+
+    public UpdateState Load() => _state;
+
+    public void Save(UpdateState state) => _state = state;
 }
 
 /// <summary>Stores <see cref="UpdateState"/> as a small JSON file (per user, %LocalAppData%\ValDoctor).</summary>

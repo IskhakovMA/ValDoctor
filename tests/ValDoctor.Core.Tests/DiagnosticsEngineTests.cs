@@ -93,6 +93,7 @@ public class DiagnosticsEngineTests
         // A TCP timeout is a slow failure: clients that land on this address hang before falling back.
         _dns.Set(Auth, "104.16.1.1", "104.16.9.9");
         _prober.Fails(Auth, "104.16.1.1", ProbeFailure.TcpTimeout).Ok(Auth, "104.16.9.9");
+        _cloudflare.Set(Auth, "104.16.9.9"); // security audit M1: a pin must also be confirmed by a trusted resolver
 
         var report = await Run(AuthService);
 

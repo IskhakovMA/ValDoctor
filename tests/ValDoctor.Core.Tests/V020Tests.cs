@@ -48,6 +48,7 @@ public class ClassificationTests
         }
 
         _prober.Ok(Auth, "104.16.120.50").Fails(Auth, "104.16.119.50", ProbeFailure.TlsTimeout, ProbeStage.TcpConnected);
+        _cloudflare.Set(Auth, "104.16.120.50", "104.16.119.50"); // security audit M1: pins need a trusted-resolver source
 
         var report = await Run(Auth);
 
@@ -82,6 +83,7 @@ public class ClassificationTests
         // Typical ISP block page injection: never connected to, never treated as harmless.
         _dns.Set(Auth, injected, "104.16.120.50");
         _prober.Ok(Auth, "104.16.120.50");
+        _cloudflare.Set(Auth, "104.16.120.50"); // security audit M1: pins need a trusted-resolver source
 
         var report = await Run(Auth);
 
@@ -696,7 +698,7 @@ public class CompatibilityAndBoundaryTests
             }
         }
 
-        Assert.True(imports >= 4);
+        Assert.True(imports >= 3); // kernel32 (2) + dwmapi; dnsapi is no longer imported (ipconfig by absolute path)
     }
 
     [Fact]

@@ -20,7 +20,10 @@ public static class AddressPolicy
         (0xAC100000, 12),  // 172.16.0.0/12 private
         (0xC0000000, 24),  // 192.0.0.0/24 IETF protocol assignments
         (0xC0000200, 24),  // 192.0.2.0/24 documentation
+        (0xC01FC400, 24),  // 192.31.196.0/24 AS112-v4
+        (0xC034C100, 24),  // 192.52.193.0/24 AMT
         (0xC0586300, 24),  // 192.88.99.0/24 deprecated 6to4 relay
+        (0xC0AF3000, 24),  // 192.175.48.0/24 direct delegation AS112
         (0xC0A80000, 16),  // 192.168.0.0/16 private
         (0xC6120000, 15),  // 198.18.0.0/15 benchmarking
         (0xC6336400, 24),  // 198.51.100.0/24 documentation
@@ -76,6 +79,20 @@ public static class AddressPolicy
 
             // 2001:db8::/32 documentation.
             if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0D && b[3] == 0xB8)
+            {
+                return false;
+            }
+
+            // 2001::/23 IETF protocol assignments that are not global services: 2001:2::/48 benchmarking,
+            // 2001:10::/28 ORCHID, 2001:20::/28 ORCHIDv2 (Teredo 2001::/32 is rejected above).
+            if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 &&
+                ((b[3] == 0x02 && b[4] == 0x00 && b[5] == 0x00) || (b[3] & 0xF0) == 0x10 || (b[3] & 0xF0) == 0x20))
+            {
+                return false;
+            }
+
+            // 3fff::/20 documentation (RFC 9637).
+            if (b[0] == 0x3F && (b[1] & 0xF0) == 0xF0)
             {
                 return false;
             }

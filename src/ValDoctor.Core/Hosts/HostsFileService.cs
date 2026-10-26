@@ -54,7 +54,7 @@ public sealed record HostsUpdateResult(HostsChange Change, bool Written);
 /// </summary>
 public sealed class HostsFileService
 {
-    private const int MaxAttempts = 3;
+    private const int MaxAttempts = 5;
     private readonly IFileSystem _fs;
     private readonly IAppLog _log;
     private readonly Action<TimeSpan> _sleep;
@@ -74,6 +74,8 @@ public sealed class HostsFileService
     public string PreviousBackupPath => HostsPath + ".valdoctor-previous.bak";
 
     public string TempPath => HostsPath + ".valdoctor.tmp";
+
+    internal string OriginalBackupTempPath => OriginalBackupPath + ".tmp";
 
     /// <summary>The pre-change backup made by RiotFix (0.1.0–0.2.1), if any. It stays the true original and is never touched.</summary>
     public string LegacyOriginalBackupPath => HostsPath + RiotFixLegacy.OriginalBackupSuffix;
@@ -117,7 +119,9 @@ public sealed class HostsFileService
                     // Only before the very first change, by ValDoctor or by RiotFix: an existing RiotFix original stays the original.
                     if (!Guard(() => _fs.FileExists(OriginalBackupPath)) && !Guard(() => _fs.FileExists(LegacyOriginalBackupPath)))
                     {
-                        Guard(() => _fs.WriteAllBytesDurable(OriginalBackupPath, original));
+                        // Written to a temporary name first, so an interrupted write never leaves a truncated "original".
+                        Guard(() => _fs.WriteAllBytesDurable(OriginalBackupTempPath, original));
+                        Guard(() => _fs.Move(OriginalBackupTempPath, OriginalBackupPath));
                         _log.Info("Hosts: original backup created.");
                     }
 
@@ -136,16 +140,29 @@ public sealed class HostsFileService
 
                 if (existed)
                 {
-                    ReplaceWithRetry();
+                    Guard(() => _fs.Replace(TempPath, HostsPath));
                 }
                 else
                 {
                     Guard(() => _fs.Move(TempPath, HostsPath));
                 }
             }
+            catch (HostsAccessException ex) when (ex.Kind == HostsErrorKind.Locked && attempt < MaxAttempts)
+            {
+                // Another program holds the file, often because it is writing it right now: start over from a fresh
+                // read instead of retrying only the swap, so that program's change is not overwritten.
+                RestoreIfHostsMissing(existed, original);
+                TryDelete(TempPath);
+                TryDelete(OriginalBackupTempPath);
+                _log.Warn($"Hosts: file locked (attempt {attempt}), retrying from a fresh read.");
+                _sleep(TimeSpan.FromMilliseconds(250 * attempt));
+                continue;
+            }
             catch
             {
+                RestoreIfHostsMissing(existed, original);
                 TryDelete(TempPath);
+                TryDelete(OriginalBackupTempPath);
                 throw;
             }
 
@@ -162,19 +179,23 @@ public sealed class HostsFileService
         throw new HostsAccessException(HostsErrorKind.ConcurrentModification, "The hosts file keeps changing while ValDoctor tries to update it.");
     }
 
-    private void ReplaceWithRetry()
+    /// <summary>
+    /// ReplaceFile can fail after it has already removed the destination (ERROR_UNABLE_TO_MOVE_REPLACEMENT). The system
+    /// must never be left without a hosts file: put the original content back.
+    /// </summary>
+    private void RestoreIfHostsMissing(bool existed, byte[] original)
     {
-        for (var i = 0; ; i++)
+        try
         {
-            try
+            if (existed && !_fs.FileExists(HostsPath))
             {
-                Guard(() => _fs.Replace(TempPath, HostsPath));
-                return;
+                _fs.WriteAllBytesDurable(HostsPath, original);
+                _log.Warn("Hosts: the file disappeared during the update and was restored to its previous content.");
             }
-            catch (HostsAccessException ex) when (ex.Kind == HostsErrorKind.Locked && i < 4)
-            {
-                _sleep(TimeSpan.FromMilliseconds(250 * (i + 1)));
-            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log.Error("Hosts: could not restore the hosts file; the previous content is in the 'previous' backup.", ex);
         }
     }
 

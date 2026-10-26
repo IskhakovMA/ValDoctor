@@ -28,6 +28,9 @@ public sealed class FakeFileSystem : IFileSystem
 
     public void SetRaw(string path, byte[] content) => _files[path] = content;
 
+    /// <summary>Removes a file without going through the hooks (simulates another component deleting it).</summary>
+    public void Remove(string path) => _files.Remove(path);
+
     public bool FileExists(string path)
     {
         Hook("exists", path);
