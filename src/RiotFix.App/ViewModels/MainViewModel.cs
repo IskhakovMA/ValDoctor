@@ -1,0 +1,472 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Windows;
+using RiotFix.App.Services;
+using RiotFix.Core;
+using RiotFix.Core.Diagnostics;
+using RiotFix.Core.Elevation;
+using RiotFix.Core.Hosts;
+using RiotFix.Core.Logging;
+using RiotFix.Core.Network;
+
+namespace RiotFix.App.ViewModels;
+
+internal sealed record ServiceRow(string DisplayName, string Host, string StatusText, StatusTone Tone);
+
+/// <summary>Wires the Core engine to Windows: hosts path, DoH client, prober, elevation, logs.</summary>
+internal sealed class AppComposition
+{
+    private static readonly HttpClient DohHttp = new(DohResolver.CreateHandler()) { Timeout = Timeout.InfiniteTimeSpan };
+
+    private AppComposition(IRiotFixLog log, HostsFileService hosts)
+    {
+        Log = log;
+        Hosts = hosts;
+        Elevation = new ElevationService(hosts, log);
+    }
+
+    public IRiotFixLog Log { get; }
+
+    public HostsFileService Hosts { get; }
+
+    public ElevationService Elevation { get; }
+
+    public static AppComposition Create(IRiotFixLog log) =>
+        new(log, new HostsFileService(new PhysicalFileSystem(), HostsLocator.GetHostsPath(), log));
+
+    public DiagnosticsEngine CreateEngine() => new(
+        new SystemResolver(),
+        TrustedResolvers.Defaults.Select(d => (ITrustedResolver)new DohResolver(d, DohHttp, TimeSpan.FromSeconds(6))).ToList(),
+        new TlsEndpointProber(new ProbeOptions { UserAgent = $"RiotFix/{AppInfo.Version} (connectivity check)" }),
+        new SystemProxyDetector(),
+        Hosts.Load,
+        log: Log);
+}
+
+internal sealed class MainViewModel : ObservableObject
+{
+    private readonly AppComposition _app;
+    private readonly IDialogs _dialogs;
+    private CancellationTokenSource? _cts;
+    private DiagnosisReport? _report;
+
+    private StatusTone _tone = StatusTone.Neutral;
+    private string _headline = "Готово к проверке";
+    private string _body = "RiotFix проверит, доступны ли сервисы Riot Games с этого компьютера, и предложит исправление, если найдёт проблему. Без вашего согласия ничего не меняется.";
+    private bool _isBusy;
+    private bool _canCancel;
+    private string _progressText = string.Empty;
+    private bool _fixReady;
+    private bool _hasChecked;
+    private bool _canRevert;
+    private string _details = "Проверка ещё не выполнялась.";
+
+    public MainViewModel(AppComposition app, IDialogs dialogs)
+    {
+        _app = app;
+        _dialogs = dialogs;
+        CheckCommand = new AsyncCommand(CheckAsync, () => !IsBusy);
+        FixCommand = new AsyncCommand(FixAsync, () => !IsBusy && _fixReady);
+        RevertCommand = new AsyncCommand(RevertAsync, () => !IsBusy && CanRevert);
+        CancelCommand = new RelayCommand(() => _cts?.Cancel(), () => CanCancel);
+        CopyReportCommand = new RelayCommand(CopyReport);
+        OpenLogsCommand = new RelayCommand(OpenLogs);
+        OpenRepositoryCommand = new RelayCommand(() => OpenUrl(AppInfo.RepositoryUrl));
+        RefreshHostsState();
+        if (CanRevert)
+        {
+            _body += " В файле hosts уже есть записи RiotFix — их можно удалить кнопкой «Отменить изменения».";
+        }
+    }
+
+    public AsyncCommand CheckCommand { get; }
+
+    public AsyncCommand FixCommand { get; }
+
+    public AsyncCommand RevertCommand { get; }
+
+    public RelayCommand CancelCommand { get; }
+
+    public RelayCommand CopyReportCommand { get; }
+
+    public RelayCommand OpenLogsCommand { get; }
+
+    public RelayCommand OpenRepositoryCommand { get; }
+
+    public ObservableCollection<ServiceRow> Services { get; } = [];
+
+    public string Version { get; } = $"Версия {AppInfo.Version}";
+
+    public string HostsPath => _app.Hosts.HostsPath;
+
+    public string BackupPath => _app.Hosts.OriginalBackupPath;
+
+    public StatusTone Tone { get => _tone; private set => SetProperty(ref _tone, value); }
+
+    public string Headline { get => _headline; private set => SetProperty(ref _headline, value); }
+
+    public string Body { get => _body; private set => SetProperty(ref _body, value); }
+
+    public string ProgressText { get => _progressText; private set => SetProperty(ref _progressText, value); }
+
+    public string Details { get => _details; private set => SetProperty(ref _details, value); }
+
+    public bool HasServices => Services.Count > 0;
+
+    public bool IsBusy
+    {
+        get => _isBusy;
+        private set
+        {
+            if (SetProperty(ref _isBusy, value))
+            {
+                OnPropertyChanged(nameof(IsIdle));
+                RaiseCommands();
+            }
+        }
+    }
+
+    public bool IsIdle => !IsBusy;
+
+    public bool CanCancel
+    {
+        get => _canCancel;
+        private set
+        {
+            if (SetProperty(ref _canCancel, value))
+            {
+                CancelCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>True when the last check produced a verified plan: the primary button becomes «Исправить».</summary>
+    public bool FixReady
+    {
+        get => _fixReady;
+        private set
+        {
+            if (SetProperty(ref _fixReady, value))
+            {
+                OnPropertyChanged(nameof(ShowCheckAsPrimary));
+                RaiseCommands();
+            }
+        }
+    }
+
+    public bool ShowCheckAsPrimary => !FixReady;
+
+    public string CheckText => _hasChecked ? "Проверить снова" : "Проверить подключение";
+
+    public bool CanRevert
+    {
+        get => _canRevert;
+        private set
+        {
+            if (SetProperty(ref _canRevert, value))
+            {
+                RaiseCommands();
+            }
+        }
+    }
+
+    /// <summary>Used by the smoke test to render states without touching the network.</summary>
+    public void ShowReport(DiagnosisReport report, StatusMessage message)
+    {
+        _report = report;
+        _hasChecked = true;
+        OnPropertyChanged(nameof(CheckText));
+        SetStatus(message);
+
+        Services.Clear();
+        foreach (var d in report.Domains)
+        {
+            var (text, tone) = d.Health switch
+            {
+                DomainHealth.Healthy => (Texts.Health(d.Health), StatusTone.Success),
+                DomainHealth.ServerError => (Texts.Health(d.Health), StatusTone.Warning),
+                _ when report.Plan.NewPins.Any(p => p.Host == d.Host) => ($"{Texts.Health(d.Health)} · есть исправление", d.Health == DomainHealth.Degraded ? StatusTone.Warning : StatusTone.Error),
+                _ => (Texts.Health(d.Health), d.Health == DomainHealth.Degraded ? StatusTone.Warning : StatusTone.Error),
+            };
+            Services.Add(new ServiceRow(d.Service.DisplayName, d.Host, text, tone));
+        }
+
+        OnPropertyChanged(nameof(HasServices));
+        Details = ReportFormatter.Format(report, AppInfo.Version);
+        FixReady = report.Plan.HasChanges;
+        RefreshHostsState();
+    }
+
+    private async Task CheckAsync()
+    {
+        await RunBusyAsync("Проверяем подключение…", cancellable: true, async ct =>
+        {
+            var report = await RunDiagnosisAsync(ct);
+            ShowReport(report, Texts.ForReport(report));
+        });
+    }
+
+    private async Task FixAsync()
+    {
+        if (_report is not { Plan.HasChanges: true } report)
+        {
+            return;
+        }
+
+        var plan = report.Plan;
+        if (!_dialogs.Confirm("Исправить подключение", BuildFixConfirmation(plan)))
+        {
+            return;
+        }
+
+        await RunBusyAsync("Ожидаем разрешения администратора…", cancellable: false, async ct =>
+        {
+            var outcome = await _app.Elevation.RunAsync(ElevatedRequest.Apply(plan.DesiredPins, plan.RequiresConflictConsent));
+            if (!HandleElevationOutcome(outcome, "Файл hosts не изменён."))
+            {
+                return;
+            }
+
+            // The re-check is not cancellable: the hosts file has already changed and the user must see the real result.
+            ProgressText = "Проверяем результат…";
+            await FlushDnsAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(700), ct);
+            var after = await RunDiagnosisAsync(ct);
+            ShowReport(after, Texts.AfterFix(after, plan.NewPins));
+        });
+    }
+
+    private async Task RevertAsync()
+    {
+        const string message =
+            "RiotFix удалит из файла hosts только свои записи и вернёт сторонние строки, которые закомментировал. " +
+            "Всё остальное содержимое файла, включая ваши изменения, останется как есть.\n\n" +
+            "Windows запросит разрешение администратора. Продолжить?";
+        if (!_dialogs.Confirm("Отменить изменения", message))
+        {
+            return;
+        }
+
+        await RunBusyAsync("Ожидаем разрешения администратора…", cancellable: false, async _ =>
+        {
+            var outcome = await _app.Elevation.RunAsync(ElevatedRequest.Revert());
+            if (!HandleElevationOutcome(outcome, "Файл hosts не изменён."))
+            {
+                return;
+            }
+
+            await FlushDnsAsync();
+            _report = null;
+            Services.Clear();
+            OnPropertyChanged(nameof(HasServices));
+            FixReady = false;
+            Details = "Изменения RiotFix отменены. Проверка ещё не выполнялась.";
+            SetStatus(outcome.ExitCode == ElevatedExitCode.NoChanges
+                ? new StatusMessage(StatusTone.Neutral, "Отменять нечего", "В файле hosts нет записей RiotFix.")
+                : new StatusMessage(StatusTone.Success, "Изменения отменены",
+                    "Записи RiotFix удалены из файла hosts, остальное содержимое не тронуто. Перезапустите Riot Client. Чтобы проверить подключение, нажмите «Проверить подключение»."));
+        });
+    }
+
+    private async Task<DiagnosisReport> RunDiagnosisAsync(CancellationToken ct)
+    {
+        var progress = new Progress<DiagnosisProgress>(p => ProgressText = p.Message);
+        var engine = _app.CreateEngine();
+        return await Task.Run(() => engine.RunAsync(RiotServices.All, progress, ct), ct);
+    }
+
+    private bool HandleElevationOutcome(ElevationOutcome outcome, string unchanged)
+    {
+        switch (outcome.Status)
+        {
+            case ElevationStatus.UserDeclined:
+                SetStatus(new StatusMessage(StatusTone.Neutral, "Изменения не внесены", $"Разрешение администратора не было получено. {unchanged}"));
+                return false;
+            case ElevationStatus.Failed:
+                SetStatus(new StatusMessage(StatusTone.Error, "Не удалось запустить изменение", $"Не получилось запустить RiotFix с правами администратора. {unchanged}"));
+                return false;
+        }
+
+        switch (outcome.ExitCode)
+        {
+            case ElevatedExitCode.Success:
+            case ElevatedExitCode.NoChanges:
+                RefreshHostsState();
+                return true;
+            case ElevatedExitCode.Conflict:
+                SetStatus(new StatusMessage(StatusTone.Warning, "Файл hosts изменился",
+                    $"После проверки в файле hosts появились другие записи для сервисов Riot. {unchanged} Проверьте подключение ещё раз."));
+                return false;
+            case ElevatedExitCode.InvalidArguments:
+                SetStatus(new StatusMessage(StatusTone.Error, "Изменение отклонено", $"Запрос не прошёл проверку безопасности. {unchanged}"));
+                return false;
+            default:
+                var kind = ElevatedRunner.ToHostsError(outcome.ExitCode);
+                SetStatus(new StatusMessage(StatusTone.Error, "Не удалось изменить файл hosts",
+                    kind is { } k ? Texts.HostsError(k) : $"Непредвиденная ошибка. {unchanged}"));
+                RefreshHostsState();
+                return false;
+        }
+    }
+
+    private async Task RunBusyAsync(string progress, bool cancellable, Func<CancellationToken, Task> action)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        _cts = cts;
+        IsBusy = true;
+        CanCancel = cancellable;
+        ProgressText = progress;
+        try
+        {
+            await action(cts.Token);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            SetStatus(new StatusMessage(StatusTone.Neutral, "Проверка отменена", "Вы остановили проверку. Ничего не изменено."));
+        }
+        catch (Exception ex)
+        {
+            _app.Log.Error("Unexpected error in UI operation.", ex);
+            SetStatus(new StatusMessage(StatusTone.Error, "Что-то пошло не так",
+                "Операция завершилась с ошибкой. Подробности записаны в журнал (Детали → «Открыть папку журналов»)."));
+        }
+        finally
+        {
+            _cts = null;
+            CanCancel = false;
+            IsBusy = false;
+            ProgressText = string.Empty;
+        }
+    }
+
+    private static string BuildFixConfirmation(FixPlan plan)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(CultureInfo.InvariantCulture, $"RiotFix добавит в файл hosts {plan.NewPins.Count} {Texts.Plural(plan.NewPins.Count, "запись", "записи", "записей")}:");
+        sb.AppendLine();
+        foreach (var pin in plan.NewPins)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    {pin.Address}    {pin.Host}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Адреса получены от доверенных DNS-серверов и дважды проверены: защищённое соединение с действительным сертификатом и ответ сервера.");
+
+        if (plan.ConflictsToDisable.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("В файле hosts уже есть сторонние строки для этих сервисов. Они не работают и будут закомментированы (вернуть их можно кнопкой «Отменить изменения»):");
+            foreach (var c in plan.ConflictsToDisable)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"    {c.LineText.Trim()}");
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Перед изменением будет создана резервная копия. Windows запросит разрешение администратора.");
+
+        bool riotRunning;
+        try
+        {
+            riotRunning = RiotProcesses.AnyRunning();
+        }
+        catch (InvalidOperationException)
+        {
+            riotRunning = false;
+        }
+
+        if (riotRunning)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Riot Client сейчас запущен — после исправления его нужно перезапустить.");
+        }
+
+        sb.AppendLine();
+        sb.Append("Продолжить?");
+        return sb.ToString();
+    }
+
+    private static async Task FlushDnsAsync()
+    {
+        try
+        {
+            await Task.Run(DnsCache.Flush);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            // Not fatal: Windows also notices hosts changes on its own.
+        }
+    }
+
+    private void SetStatus(StatusMessage message)
+    {
+        Tone = message.Tone;
+        Headline = message.Headline;
+        Body = message.Body;
+    }
+
+    private void RefreshHostsState()
+    {
+        try
+        {
+            CanRevert = _app.Hosts.Load().HasRiotFixContent;
+        }
+        catch (HostsAccessException)
+        {
+            CanRevert = false;
+        }
+    }
+
+    private void RaiseCommands()
+    {
+        CheckCommand.RaiseCanExecuteChanged();
+        FixCommand.RaiseCanExecuteChanged();
+        RevertCommand.RaiseCanExecuteChanged();
+        CancelCommand.RaiseCanExecuteChanged();
+    }
+
+    private void CopyReport()
+    {
+        try
+        {
+            Clipboard.SetText(Details);
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            _dialogs.Info("Копирование", "Не удалось скопировать отчёт: буфер обмена занят другой программой.");
+        }
+    }
+
+    private void OpenLogs()
+    {
+        try
+        {
+            Directory.CreateDirectory(AppInfo.LogDirectory);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{AppInfo.LogDirectory}\"") { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            _dialogs.Info("Журналы", $"Журналы находятся в папке:\n{AppInfo.LogDirectory}");
+        }
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+    }
+}

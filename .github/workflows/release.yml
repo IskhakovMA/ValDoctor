@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag '$TAG' is not a semantic version (vMAJOR.MINOR.PATCH[-suffix])" >&2; exit 1
+          fi
+          version="${TAG#v}"
+          echo "version=${version%%-*}" >> "$GITHUB_OUTPUT"
+          # 0.x and suffixed versions are always pre-releases: not declared stable until verified on
+          # a real Windows machine with a reproducible connectivity problem.
+          if [[ "${BASH_REMATCH[1]}" == "0" || -n "${BASH_REMATCH[4]}" ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  publish:
+    name: Publish GitHub Release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (release notes)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/release-notes.md
+          sparse-checkout-cone-mode: false
+
+      - name: Download tested EXE
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: riotfix-win-x64
+          path: dist
+
+      - name: Verify checksum
+        working-directory: dist
+        run: sha256sum --check RiotFix.exe.sha256
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          flags=(--verify-tag --title "RiotFix $TAG" --notes-file .github/release-notes.md)
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); else flags+=(--latest); fi
+          gh release create "$TAG" dist/RiotFix.exe dist/RiotFix.exe.sha256 --repo "$GITHUB_REPOSITORY" "${flags[@]}"

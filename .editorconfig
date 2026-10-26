@@ -1,0 +1,40 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{xml,xaml,csproj,props,targets,json,yml,yaml,manifest,slnx}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_sort_system_directives_first = true
+csharp_prefer_braces = when_multiline:suggestion
+
+# User-facing strings are Russian by design; no resource localization in the MVP.
+dotnet_diagnostic.CA1303.severity = none
+# The UI layer intentionally catches all exceptions at boundaries to show a friendly error.
+dotnet_diagnostic.CA1031.severity = none
+# Library code awaits with ConfigureAwait(false); UI code does not need it.
+dotnet_diagnostic.CA2007.severity = none
+# Simple file logger, not Microsoft.Extensions.Logging.
+dotnet_diagnostic.CA1848.severity = none
+# Value records/collections exposed as IReadOnlyList are fine for this app.
+dotnet_diagnostic.CA1002.severity = none
+dotnet_diagnostic.CA1716.severity = none
+
+[tests/**.cs]
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.CA2000.severity = none
+dotnet_diagnostic.CA1861.severity = none
+dotnet_diagnostic.CA5394.severity = none
+dotnet_diagnostic.CA5400.severity = none

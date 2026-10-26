@@ -1,0 +1,133 @@
+name: Build (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version number without the "v" prefix
+        type: string
+        default: 0.1.0
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Build, test, publish (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Record hosts file fingerprint (CI must never change it)
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "$env:SystemRoot\System32\drivers\etc\hosts" -Algorithm SHA256).Hash
+          "HOSTS_HASH_BEFORE=$hash" >> $env:GITHUB_ENV
+          Write-Host "hosts SHA-256: $hash"
+
+      - name: Restore
+        run: dotnet restore RiotFix.slnx
+
+      - name: Check formatting
+        run: dotnet format RiotFix.slnx --verify-no-changes --no-restore
+
+      - name: Build (Release, analyzers, warnings as errors)
+        run: dotnet build RiotFix.slnx -c Release --no-restore -p:Version=${{ env.VERSION }}
+
+      - name: Test
+        run: dotnet test RiotFix.slnx -c Release --no-build --logger "trx;LogFileName=results.trx" --logger "console;verbosity=normal" --results-directory TestResults
+
+      - name: Publish self-contained single-file EXE
+        run: >
+          dotnet publish src/RiotFix.App/RiotFix.App.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:Version=${{ env.VERSION }} -o publish
+
+      - name: Smoke test - start the real EXE and render the UI
+        shell: pwsh
+        run: |
+          $out = Join-Path $pwd "smoke"
+          $p = Start-Process -FilePath "publish\RiotFix.exe" -ArgumentList "--smoke-test", "`"$out`"" -Wait -PassThru
+          Get-ChildItem $out | Format-Table Name, Length
+          if (Test-Path "$out\smoke-error.txt") { Get-Content "$out\smoke-error.txt" }
+          if ($p.ExitCode -ne 0) { throw "Smoke test exit code $($p.ExitCode)" }
+          if (-not (Test-Path "$out\smoke-ok.txt")) { throw "smoke-ok.txt missing" }
+          if ((Get-ChildItem "$out\*.png").Count -lt 6) { throw "Expected 6 screenshots" }
+
+      - name: Smoke test - elevated helper rejects invalid requests
+        shell: pwsh
+        run: |
+          # Host outside the allowlist and a private IP must be refused with exit code 2 (InvalidArguments).
+          $cases = @(
+            @("--riotfix-elevated", "apply", "--pin", "evil.example=104.16.1.1"),
+            @("--riotfix-elevated", "apply", "--pin", "auth.riotgames.com=127.0.0.1"),
+            @("--riotfix-elevated", "unknown")
+          )
+          foreach ($case in $cases) {
+            $p = Start-Process -FilePath "publish\RiotFix.exe" -ArgumentList $case -Wait -PassThru
+            Write-Host "$($case -join ' ') -> exit $($p.ExitCode)"
+            if ($p.ExitCode -ne 2) { throw "Expected exit code 2 for: $($case -join ' ')" }
+          }
+          # Revert on a hosts file without RiotFix content must report NoChanges (1) and write nothing.
+          $p = Start-Process -FilePath "publish\RiotFix.exe" -ArgumentList "--riotfix-elevated", "revert" -Wait -PassThru
+          Write-Host "revert -> exit $($p.ExitCode)"
+          if ($p.ExitCode -ne 1) { throw "Expected NoChanges (1) from revert, got $($p.ExitCode)" }
+
+      - name: Self-check against live Riot services (read-only, informational)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $report = Join-Path $pwd "smoke\self-check.txt"
+          $p = Start-Process -FilePath "publish\RiotFix.exe" -ArgumentList "--self-check", "`"$report`"" -Wait -PassThru
+          Get-Content $report
+          if ($p.ExitCode -ne 0) { throw "Self-check exit code $($p.ExitCode)" }
+
+      - name: Verify hosts file is unchanged
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "$env:SystemRoot\System32\drivers\etc\hosts" -Algorithm SHA256).Hash
+          if ($hash -ne $env:HOSTS_HASH_BEFORE) { throw "The runner's hosts file was modified!" }
+          if (Test-Path "$env:SystemRoot\System32\drivers\etc\hosts.riotfix-original.bak") { throw "Unexpected backup file" }
+          Write-Host "hosts unchanged: $hash"
+
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "publish\RiotFix.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  RiotFix.exe" | Out-File -FilePath "publish\RiotFix.exe.sha256" -Encoding ascii -NoNewline
+          Write-Host "RiotFix.exe SHA-256: $hash"
+          Write-Host ("Size: {0:N1} MB" -f ((Get-Item "publish\RiotFix.exe").Length / 1MB))
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: riotfix-win-x64
+          path: |
+            publish/RiotFix.exe
+            publish/RiotFix.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload smoke test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-results
+          path: |
+            smoke/
+            TestResults/
+          if-no-files-found: warn
+          retention-days: 14

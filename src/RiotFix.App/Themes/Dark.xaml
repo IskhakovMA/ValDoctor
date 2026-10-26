@@ -1,0 +1,22 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <SolidColorBrush x:Key="Bg" Color="#1B1C20" />
+  <SolidColorBrush x:Key="Surface" Color="#25272C" />
+  <SolidColorBrush x:Key="SurfaceHover" Color="#2E3036" />
+  <SolidColorBrush x:Key="SurfacePressed" Color="#363940" />
+  <SolidColorBrush x:Key="Line" Color="#383B42" />
+  <SolidColorBrush x:Key="Text" Color="#F2F3F5" />
+  <SolidColorBrush x:Key="TextMuted" Color="#A4A9B3" />
+  <SolidColorBrush x:Key="Accent" Color="#2563EB" />
+  <SolidColorBrush x:Key="AccentHover" Color="#3B74F0" />
+  <SolidColorBrush x:Key="AccentPressed" Color="#1D4FD8" />
+  <SolidColorBrush x:Key="AccentText" Color="#FFFFFF" />
+  <SolidColorBrush x:Key="AccentSoft" Color="#1E2A44" />
+  <SolidColorBrush x:Key="Success" Color="#4ADE80" />
+  <SolidColorBrush x:Key="SuccessSoft" Color="#1A3326" />
+  <SolidColorBrush x:Key="Warning" Color="#FBBF24" />
+  <SolidColorBrush x:Key="WarningSoft" Color="#3A2E14" />
+  <SolidColorBrush x:Key="Danger" Color="#F87171" />
+  <SolidColorBrush x:Key="DangerSoft" Color="#3D1F21" />
+  <SolidColorBrush x:Key="ScrollThumb" Color="#4A4E57" />
+</ResourceDictionary>

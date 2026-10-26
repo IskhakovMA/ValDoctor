@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors Condition="'$(CI)' == 'true'">true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <DebugType>embedded</DebugType>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <Product>RiotFix</Product>
+    <Company>RiotFix contributors</Company>
+    <Authors>RiotFix contributors</Authors>
+    <Copyright>Copyright (c) 2026 RiotFix contributors</Copyright>
+    <NeutralLanguage>ru-RU</NeutralLanguage>
+  </PropertyGroup>
+</Project>

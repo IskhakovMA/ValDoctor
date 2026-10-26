@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.cs text eol=lf
+*.xaml text eol=lf
+*.ico binary
+*.png binary
+# Test fixtures that must keep exact bytes (CRLF, BOM, UTF-16)
+tests/**/Fixtures/** binary

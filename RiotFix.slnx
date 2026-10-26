@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RiotFix.App/RiotFix.App.csproj" />
+    <Project Path="src/RiotFix.Core/RiotFix.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RiotFix.Core.Tests/RiotFix.Core.Tests.csproj" />
+  </Folder>
+</Solution>

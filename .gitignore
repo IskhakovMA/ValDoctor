@@ -1,0 +1,27 @@
+# Build output
+bin/
+obj/
+artifacts/
+publish/
+out/
+TestResults/
+*.trx
+coverage*.xml
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.DotSettings.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Never commit binaries
+*.exe
+*.dll
+*.pdb
+*.zip
