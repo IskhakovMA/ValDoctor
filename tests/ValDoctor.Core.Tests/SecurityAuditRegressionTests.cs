@@ -106,6 +106,90 @@ public class SecurityAuditRegressionTests
         Assert.Equal(Original, fs.Get(HostsPath));
     }
 
+    [Fact]
+    public void M3_hosts_deleted_by_another_program_is_not_recreated_unless_our_replace_removed_it()
+    {
+        var fs = new FakeFileSystem();
+        fs.Seed(HostsPath, Original);
+        var service = new HostsFileService(fs, HostsPath, NullLog.Instance, _ => { });
+        fs.BeforeOperation = (op, path) =>
+        {
+            if (op == "write" && path.EndsWith(".valdoctor.tmp", StringComparison.Ordinal))
+            {
+                fs.Remove(HostsPath); // another program deletes hosts before our Replace ...
+                throw new UnauthorizedAccessException("denied"); // ... and our update fails before swapping
+            }
+        };
+
+        Assert.Throws<HostsAccessException>(() => service.Update(d => d.SetPins([AuthPin], false)));
+        Assert.False(fs.Has(HostsPath)); // that program's decision is respected: ValDoctor does not recreate it
+        Assert.DoesNotContain("write:hosts", fs.Operations);
+    }
+
+    // ---- M1 (re-review): only trusted-sourced addresses use the bounded candidate slots ------------------------
+
+    [Fact]
+    public async Task M1_system_only_relays_do_not_crowd_out_trusted_candidates()
+    {
+        var dns = new FakeSystemResolver().Set(Auth, "45.10.20.1", "45.10.20.2", "45.10.20.3", "104.16.119.50");
+        var prober = new FakeProber()
+            .Ok(Auth, "45.10.20.1").Ok(Auth, "45.10.20.2").Ok(Auth, "45.10.20.3")
+            .Fails(Auth, "104.16.119.50", ProbeFailure.TlsTimeout, ProbeStage.TcpConnected)
+            .Ok(Auth, "104.16.121.50");
+        var doh = new FakeTrustedResolver("Cloudflare DNS").Set(Auth, "104.16.122.1", "104.16.122.2", "104.16.122.3", "104.16.121.50");
+
+        var report = await new DiagnosticsEngine(dns, [doh], prober, new FakeProxy(), HostsDocument.Empty, TestOptions.Fast with { MaxCandidatesPerHost = 4 })
+            .RunAsync([RiotServices.Find(Auth)!], null, CancellationToken.None);
+
+        Assert.Equal("104.16.121.50", report.Plan.NewPins.Single().Address.ToString());
+        Assert.DoesNotContain(report.Domains[0].Candidates, c => !c.ConfirmedByTrustedDns);
+    }
+
+    // ---- M1 (re-review): an existing pin that no trusted resolver vouches for is reported -----------------------
+
+    [Fact]
+    public async Task M1_existing_pin_not_confirmed_by_trusted_dns_is_reported_but_not_changed()
+    {
+        var hosts = HostsDocument.Empty();
+        hosts.SetPins([new HostPin(Auth, IPAddress.Parse("45.10.20.30"))], false);
+        var dns = new FakeSystemResolver().Set(Auth, "45.10.20.30");
+        var prober = new FakeProber().Ok(Auth, "45.10.20.30");
+        var doh = new FakeTrustedResolver("Cloudflare DNS").Set(Auth, "104.16.120.50");
+
+        var report = await new DiagnosticsEngine(dns, [doh], prober, new FakeProxy(), () => hosts, TestOptions.Fast)
+            .RunAsync([RiotServices.Find(Auth)!], null, CancellationToken.None);
+
+        Assert.False(report.Domains[0].ManagedPinConfirmedByTrustedDns);
+        Assert.False(report.Plan.HasChanges); // detection only; replacing the pin is a separate decision
+        Assert.Contains("не подтверждает ни один доверенный DNS", ReportFormatter.Format(report, "0.3.0"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task M1_existing_pin_confirmed_by_trusted_dns_is_not_flagged()
+    {
+        var hosts = HostsDocument.Empty();
+        hosts.SetPins([AuthPin], false);
+        var dns = new FakeSystemResolver().Set(Auth, "104.16.120.50");
+        var prober = new FakeProber().Ok(Auth, "104.16.120.50");
+        var doh = new FakeTrustedResolver("Cloudflare DNS").Set(Auth, "104.16.120.50");
+
+        var report = await new DiagnosticsEngine(dns, [doh], prober, new FakeProxy(), () => hosts, TestOptions.Fast)
+            .RunAsync([RiotServices.Find(Auth)!], null, CancellationToken.None);
+
+        Assert.True(report.Domains[0].ManagedPinConfirmedByTrustedDns);
+        Assert.Equal(Verdict.AllHealthy, report.Verdict);
+    }
+
+    [Fact]
+    public void M2_genuine_riotfix_disabled_lines_are_still_restored()
+    {
+        const string original = "5.6.7.8\tAUTH.riotgames.com.  account.riotgames.com # old fix";
+        var text = HostsDocument.MakeDisabled(original).Replace("# valdoctor-off:", "# riotfix-off:", StringComparison.Ordinal) + "\r\n";
+        var doc = HostsDocument.Parse(Encoding.ASCII.GetBytes(text));
+        doc.RevertAll();
+        Assert.Equal(original + "\r\n", doc.ToText());
+    }
+
     // ---- L1: a lock during Replace must not silently drop another program's concurrent change --------------------
 
     [Fact]
@@ -202,12 +286,9 @@ public class SecurityAuditRegressionTests
 
     [Theory]
     [InlineData("3fff::1")]           // documentation, RFC 9637
+    [InlineData("3fff:fff:ffff::1")]  // last address of 3fff::/20
     [InlineData("2001:2::1")]         // benchmarking, RFC 5180
-    [InlineData("2001:10::1")]        // ORCHID
-    [InlineData("2001:20::1")]        // ORCHIDv2
-    [InlineData("192.31.196.1")]      // AS112-v4
-    [InlineData("192.52.193.1")]      // AMT
-    [InlineData("192.175.48.1")]      // direct delegation AS112
+    [InlineData("2001:10::1")]        // ORCHID (deprecated)
     public void I3_additional_special_purpose_ranges_are_not_public(string ip)
     {
         Assert.False(AddressPolicy.IsPublicUnicast(IPAddress.Parse(ip)));
@@ -217,6 +298,12 @@ public class SecurityAuditRegressionTests
     [InlineData("2606:4700::6810:ce83")]
     [InlineData("2001:4860:4860::8888")]
     [InlineData("104.16.120.50")]
+    [InlineData("3fff:1000::1")]      // outside 3fff::/20 (re-review: old mask matched 3ff0::/12)
+    [InlineData("3ff0::1")]
+    [InlineData("2001:2:1::1")]       // outside 2001:2::/48
+    [InlineData("2001:20::1")]        // ORCHIDv2 is globally reachable per IANA
+    [InlineData("192.31.196.1")]      // AS112 is globally reachable per IANA
+    [InlineData("192.175.48.1")]
     public void I3_real_service_addresses_stay_public(string ip) => Assert.True(AddressPolicy.IsPublicUnicast(IPAddress.Parse(ip)));
 
     // ---- L3/L4: elevated-process hardening that lives in project files ------------------------------------------

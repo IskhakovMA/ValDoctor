@@ -111,6 +111,7 @@ public sealed class HostsFileService
             }
 
             var updated = document.ToBytes();
+            var replaceStarted = false;
 
             try
             {
@@ -140,6 +141,7 @@ public sealed class HostsFileService
 
                 if (existed)
                 {
+                    replaceStarted = true;
                     Guard(() => _fs.Replace(TempPath, HostsPath));
                 }
                 else
@@ -151,7 +153,7 @@ public sealed class HostsFileService
             {
                 // Another program holds the file, often because it is writing it right now: start over from a fresh
                 // read instead of retrying only the swap, so that program's change is not overwritten.
-                RestoreIfHostsMissing(existed, original);
+                RestoreIfHostsMissing(replaceStarted, original);
                 TryDelete(TempPath);
                 TryDelete(OriginalBackupTempPath);
                 _log.Warn($"Hosts: file locked (attempt {attempt}), retrying from a fresh read.");
@@ -160,7 +162,7 @@ public sealed class HostsFileService
             }
             catch
             {
-                RestoreIfHostsMissing(existed, original);
+                RestoreIfHostsMissing(replaceStarted, original);
                 TryDelete(TempPath);
                 TryDelete(OriginalBackupTempPath);
                 throw;
@@ -183,11 +185,12 @@ public sealed class HostsFileService
     /// ReplaceFile can fail after it has already removed the destination (ERROR_UNABLE_TO_MOVE_REPLACEMENT). The system
     /// must never be left without a hosts file: put the original content back.
     /// </summary>
-    private void RestoreIfHostsMissing(bool existed, byte[] original)
+    private void RestoreIfHostsMissing(bool replaceStarted, byte[] original)
     {
+        // Only a failed swap of OUR replace can have removed the file; if another program deleted it, that is its call.
         try
         {
-            if (existed && !_fs.FileExists(HostsPath))
+            if (replaceStarted && !_fs.FileExists(HostsPath))
             {
                 _fs.WriteAllBytesDurable(HostsPath, original);
                 _log.Warn("Hosts: the file disappeared during the update and was restored to its previous content.");

@@ -58,7 +58,8 @@ public sealed record DomainDiagnosis(
     HostsOverride Override,
     IReadOnlyList<TrustedDnsAnswer> TrustedAnswers,
     IReadOnlyList<CandidateEvidence> Candidates,
-    bool DnsRetried = false)
+    bool DnsRetried = false,
+    bool? ManagedPinConfirmedByTrustedDns = null)
 {
     public string Host => Service.Host;
 
