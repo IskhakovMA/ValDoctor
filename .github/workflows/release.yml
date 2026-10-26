@@ -1,6 +1,6 @@
 name: Release
 
-# Publishing is gated three ways (see docs/RELEASING.md):
+# Publishing is gated three ways:
 #   1. a tag ruleset lets only the repository owner create v* tags;
 #   2. the "validate" job refuses tags that do not point to a commit on main whose CI passed;
 #   3. the "publish" job runs in the protected "release" environment and waits for manual approval.
