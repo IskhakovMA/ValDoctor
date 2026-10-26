@@ -91,10 +91,11 @@ public sealed record FixPlan(
     IReadOnlyList<HostPin> DesiredPins,
     IReadOnlyList<HostPin> NewPins,
     IReadOnlyList<HostPin> ReplacedPins,
+    IReadOnlyList<HostPin> RemovedPins,
     IReadOnlyList<HostsConflict> ConflictsToDisable,
     IReadOnlyList<UnfixableDomain> Unfixable)
 {
-    public static FixPlan Empty { get; } = new([], [], [], [], []);
+    public static FixPlan Empty { get; } = new([], [], [], [], [], []);
 
     public bool HasChanges => NewPins.Count > 0;
 

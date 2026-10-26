@@ -92,7 +92,7 @@ public sealed class FileLog : IRiotFixLog
             lock (_gate)
             {
                 System.IO.Directory.CreateDirectory(_directory);
-                var file = Path.Combine(_directory, $"riotfix-{DateTime.Now:yyyyMMdd}.log");
+                var file = Path.Join(_directory, $"riotfix-{DateTime.Now:yyyyMMdd}.log");
                 File.AppendAllText(file, line, Encoding.UTF8);
             }
         }

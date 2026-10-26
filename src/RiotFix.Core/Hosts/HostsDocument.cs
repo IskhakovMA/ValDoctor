@@ -29,6 +29,12 @@ public sealed class HostsDocument
 
     private readonly List<Line> _lines;
 
+    private static ReadOnlySpan<byte> Utf8Bom => [0xEF, 0xBB, 0xBF];
+
+    private static ReadOnlySpan<byte> Utf16LeBom => [0xFF, 0xFE];
+
+    private static ReadOnlySpan<byte> Utf16BeBom => [0xFE, 0xFF];
+
     private HostsDocument(List<Line> lines, HostsTextEncoding encoding, string newLine)
     {
         _lines = lines;
@@ -50,17 +56,17 @@ public sealed class HostsDocument
         HostsTextEncoding encoding;
         string text;
 
-        if (bytes.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]))
+        if (bytes.StartsWith(Utf8Bom))
         {
             encoding = HostsTextEncoding.Utf8Bom;
             text = System.Text.Encoding.Latin1.GetString(bytes[3..]);
         }
-        else if (bytes.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xFE]))
+        else if (bytes.StartsWith(Utf16LeBom))
         {
             encoding = HostsTextEncoding.Utf16LittleEndian;
             text = DecodeStrict(new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true), bytes[2..]);
         }
-        else if (bytes.StartsWith((ReadOnlySpan<byte>)[0xFE, 0xFF]))
+        else if (bytes.StartsWith(Utf16BeBom))
         {
             encoding = HostsTextEncoding.Utf16BigEndian;
             text = DecodeStrict(new UnicodeEncoding(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true), bytes[2..]);
@@ -226,7 +232,8 @@ public sealed class HostsDocument
             disabled++;
         }
 
-        // 2. Restore lines we disabled earlier whose hosts are no longer pinned.
+        // 2. Restore lines we disabled earlier once none of their hosts is pinned any more. A line that still maps
+        //    a pinned host stays disabled (restoring it would conflict); a full revert always restores it.
         for (var i = 0; i < _lines.Count; i++)
         {
             if (TryParseDisabled(_lines[i].Text, out var original, out var names) && !names.Any(targets.Contains))
@@ -293,10 +300,12 @@ public sealed class HostsDocument
         var set = new HashSet<string>(hosts, StringComparer.OrdinalIgnoreCase);
         var before = Snapshot();
         var restored = 0;
+        var remaining = GetPins().Select(p => p.Host).Where(h => !set.Contains(h)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < _lines.Count; i++)
         {
-            if (TryParseDisabled(_lines[i].Text, out var original, out var names) && names.Any(set.Contains))
+            // Restore only when no host on that line stays pinned; otherwise it would conflict with a remaining pin.
+            if (TryParseDisabled(_lines[i].Text, out var original, out var names) && names.Any(set.Contains) && !names.Any(remaining.Contains))
             {
                 _lines[i] = _lines[i] with { Text = original };
                 restored++;
@@ -359,8 +368,10 @@ public sealed class HostsDocument
     {
         var insertAt = -1;
         var kept = new List<Line>(_lines.Count);
-        foreach (var line in _lines)
+        var removedUnterminatedLast = false;
+        for (var i = 0; i < _lines.Count; i++)
         {
+            var line = _lines[i];
             var owned = IsMarker(line.Text) || TryParsePin(line.Text, out _);
             if (owned && filter(line.Text))
             {
@@ -369,10 +380,18 @@ public sealed class HostsDocument
                     insertAt = kept.Count;
                 }
 
+                removedUnterminatedLast = i == _lines.Count - 1 && line.Terminator.Length == 0;
                 continue;
             }
 
             kept.Add(line);
+        }
+
+        // RiotFix writes its END marker without a newline when the original file had no trailing newline
+        // (and adds one to the user's last line instead). Undo that so the original bytes come back exactly.
+        if (removedUnterminatedLast && kept.Count > 0 && kept[^1].Terminator.Length > 0)
+        {
+            kept[^1] = kept[^1] with { Terminator = string.Empty };
         }
 
         _lines.Clear();
@@ -382,10 +401,13 @@ public sealed class HostsDocument
 
     private void InsertBlock(int index, IReadOnlyCollection<HostPin> pins)
     {
+        var endTerminator = NewLine;
         if (index == _lines.Count && _lines.Count > 0 && _lines[^1].Terminator.Length == 0)
         {
-            // The file does not end with a newline: terminate the last line so our block starts on its own line.
+            // The file does not end with a newline: move the newline to before our block and leave the END
+            // marker unterminated, so removing the block restores the original bytes.
             _lines[^1] = _lines[^1] with { Terminator = NewLine };
+            endTerminator = string.Empty;
         }
 
         var block = new List<Line> { new(BeginMarker, NewLine) };
@@ -393,7 +415,7 @@ public sealed class HostsDocument
             .OrderBy(p => RiotServices.OrderOf(p.Host))
             .ThenBy(p => p.Host, StringComparer.OrdinalIgnoreCase)
             .Select(p => new Line(PinLine(p), NewLine)));
-        block.Add(new Line(EndMarker, NewLine));
+        block.Add(new Line(EndMarker, endTerminator));
         _lines.InsertRange(index, block);
     }
 
@@ -475,7 +497,8 @@ public sealed class HostsDocument
             return false;
         }
 
-        names = tokens[1..];
+        // "auth.riotgames.com." (fully qualified) names the same host.
+        names = tokens[1..].Select(n => n.Length > 1 ? n.TrimEnd('.') : n).ToArray();
         return true;
     }
 

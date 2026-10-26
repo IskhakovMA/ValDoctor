@@ -18,26 +18,35 @@ internal static class AppInfo
     public const string RepositoryUrl = "https://github.com/IskhakovMA/riotfix";
 
     public static string LogDirectory { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RiotFix", "logs");
+        Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RiotFix", "logs");
 }
 
 internal static class HostsLocator
 {
     /// <summary>
-    /// The hosts file lives in the directory named by the Tcpip "DataBasePath" registry value
-    /// (only administrators can change it); falls back to %SystemRoot%\System32\drivers\etc.
+    /// The hosts file lives in the directory named by the Tcpip "DataBasePath" registry value (HKLM, admin-only).
+    /// The value is read WITHOUT expanding environment variables: the elevated helper's environment comes from
+    /// the user profile (HKCU\Environment is user-writable), so "%SystemRoot%" must not be resolved through it.
+    /// Only the standard location (resolved via the system API) or a literal absolute local path is accepted.
     /// </summary>
     public static string GetHostsPath()
     {
+        var standard = Path.Join(Environment.SystemDirectory, "drivers", "etc", "hosts");
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters");
-            if (key?.GetValue("DataBasePath") is string raw)
+            if (key?.GetValue("DataBasePath", null, RegistryValueOptions.DoNotExpandEnvironmentNames) is string raw)
             {
-                var expanded = Environment.ExpandEnvironmentVariables(raw).Trim();
-                if (Path.IsPathFullyQualified(expanded) && !expanded.StartsWith(@"\\", StringComparison.Ordinal))
+                var value = raw.Trim().TrimEnd('\\');
+                if (string.Equals(value, @"%SystemRoot%\System32\drivers\etc", StringComparison.OrdinalIgnoreCase))
                 {
-                    return Path.Combine(expanded, "hosts");
+                    return standard;
+                }
+
+                if (!value.Contains('%', StringComparison.Ordinal) && Path.IsPathFullyQualified(value) &&
+                    !value.StartsWith(@"\\", StringComparison.Ordinal))
+                {
+                    return Path.Join(value, "hosts");
                 }
             }
         }
@@ -45,7 +54,7 @@ internal static class HostsLocator
         {
         }
 
-        return Path.Combine(Environment.SystemDirectory, "drivers", "etc", "hosts");
+        return standard;
     }
 }
 
@@ -65,7 +74,7 @@ internal static partial class DnsCache
         {
         }
 
-        var ipconfig = Path.Combine(Environment.SystemDirectory, "ipconfig.exe");
+        var ipconfig = Path.Join(Environment.SystemDirectory, "ipconfig.exe");
         using var process = Process.Start(new ProcessStartInfo(ipconfig, "/flushdns")
         {
             CreateNoWindow = true,
@@ -76,8 +85,41 @@ internal static partial class DnsCache
     }
 
     [LibraryImport("dnsapi.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool DnsFlushResolverCache();
+}
+
+internal static partial class NativeHardening
+{
+    private const uint LoadLibrarySearchSystem32 = 0x00000800;
+
+    /// <summary>
+    /// Restricts further native DLL loading of this process to System32, so an elevated RiotFix
+    /// cannot pick up a planted DLL from the download folder or the current directory.
+    /// </summary>
+    public static void RestrictDllSearchToSystem32()
+    {
+        try
+        {
+            _ = SetDefaultDllDirectories(LoadLibrarySearchSystem32);
+            _ = SetDllDirectoryW(string.Empty);
+        }
+        catch (Exception ex) when (ex is EntryPointNotFoundException or DllNotFoundException)
+        {
+            // Not available: nothing else to do, the helper still validates all input.
+        }
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetDefaultDllDirectories(uint directoryFlags);
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetDllDirectoryW(string pathName);
 }
 
 internal static class RiotProcesses

@@ -1,0 +1,42 @@
+name: Сообщить о проблеме
+description: RiotFix не помог, показал ошибку или повёл себя неожиданно
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо! Пожалуйста, не публикуйте логины, пароли, токены и другие личные данные.
+  - type: input
+    id: version
+    attributes:
+      label: Версия RiotFix
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows
+      placeholder: "Windows 11 24H2"
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Что вы нажали, что ожидали увидеть и что увидели.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Отчёт о проверке
+      description: В RiotFix откройте «Детали» → «Скопировать отчёт» и вставьте сюда. Отчёт не содержит личных данных.
+      render: text
+  - type: dropdown
+    id: game
+    attributes:
+      label: Удалось ли войти в игру после исправления?
+      options:
+        - Не применял исправление
+        - Да
+        - Нет
+        - Не проверял

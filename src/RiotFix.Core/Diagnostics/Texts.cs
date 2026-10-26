@@ -52,7 +52,9 @@ public static class Texts
                 $"Все {Services(total)} Riot отвечают. {ScopeNote}"),
             Verdict.FixAvailable => new(StatusTone.Warning, "Найдены проблемы с подключением",
                 $"Не отвечают {broken} из {Services(total)}. Для {report.Plan.NewPins.Count} из них найден проверенный рабочий адрес." +
-                (report.Plan.Unfixable.Count > 0 ? $" Для остальных ({report.Plan.Unfixable.Count}) безопасного исправления нет." : string.Empty) +
+                (report.Plan.Unfixable.Count > 0
+                    ? $" Для {report.Plan.Unfixable.Count} {Plural(report.Plan.Unfixable.Count, "сервиса", "сервисов", "сервисов")} безопасного исправления нет."
+                    : string.Empty) +
                 " Нажмите «Исправить», чтобы RiotFix добавил записи в файл hosts."),
             Verdict.ProblemsWithoutFix => new(StatusTone.Error, "Найдены проблемы, исправления нет",
                 $"Не отвечают {broken} из {Services(total)}. RiotFix не нашёл адрес, который прошёл бы проверку, поэтому файл hosts изменён не будет. " +

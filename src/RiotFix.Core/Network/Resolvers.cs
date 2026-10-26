@@ -156,6 +156,10 @@ public sealed class DohResolver : ITrustedResolver
             {
                 lastError = "invalid response";
             }
+            catch (IOException ex)
+            {
+                lastError = ex.GetType().Name;
+            }
         }
 
         return new TrustedDnsAnswer(Name, false, [], lastError);

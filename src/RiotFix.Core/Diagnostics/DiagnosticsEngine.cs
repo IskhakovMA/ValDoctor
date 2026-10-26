@@ -20,7 +20,7 @@ public sealed record DiagnosticsOptions
 
     public TimeSpan DnsTimeout { get; init; } = TimeSpan.FromSeconds(8);
 
-    public TimeSpan TrustedDnsTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan TrustedDnsTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>Hard upper bound for one probe, on top of the prober's own per-stage timeouts.</summary>
     public TimeSpan ProbeBudget { get; init; } = TimeSpan.FromSeconds(25);
@@ -244,7 +244,8 @@ public sealed class DiagnosticsEngine
         {
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             budget.CancelAfter(_options.ProbeBudget);
-            return await _prober.ProbeAsync(host, address, budget.Token).WaitAsync(budget.Token).ConfigureAwait(false);
+            // No WaitAsync here: the semaphore must be held until the probe really finishes. The prober honours the token.
+            return await _prober.ProbeAsync(host, address, budget.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

@@ -86,6 +86,11 @@ public static class ReportFormatter
                 sb.Append(ci, $"  − {pin.Address} {pin.Host} (заменяется)").AppendLine();
             }
 
+            foreach (var pin in plan.RemovedPins)
+            {
+                sb.Append(ci, $"  − {pin.Address} {pin.Host} (запись RiotFix будет удалена из-за сторонней строки)").AppendLine();
+            }
+
             foreach (var c in plan.ConflictsToDisable)
             {
                 sb.Append(ci, $"  # будет закомментирована сторонняя строка: {c.LineText.Trim()}").AppendLine();

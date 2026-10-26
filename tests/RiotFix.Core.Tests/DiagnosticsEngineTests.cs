@@ -295,6 +295,23 @@ public class DiagnosticsEngineTests
     }
 
     [Fact]
+    public async Task Conflict_resolution_is_stable_and_never_proposes_undisableable_lines()
+    {
+        // Dropping auth (mixed line) makes line 2 non-disableable for account as well.
+        _hosts = HostsDocument.Parse(Encoding.ASCII.GetBytes(
+            "1.2.3.4 auth.riotgames.com example.com\r\n5.6.7.8 auth.riotgames.com account.riotgames.com\r\n"));
+        _dns.Set(Auth, "1.2.3.4").Set(Account, "5.6.7.8");
+        _cloudflare.Set(Auth, "104.18.4.4").Set(Account, "104.18.5.5");
+        _prober.Ok(Auth, "104.18.4.4").Ok(Account, "104.18.5.5");
+
+        var report = await Run();
+
+        Assert.All(report.Plan.ConflictsToDisable, c => Assert.True(c.CanDisable));
+        Assert.False(report.Plan.HasChanges);
+        Assert.Equal(2, report.Plan.Unfixable.Count);
+    }
+
+    [Fact]
     public async Task Unreadable_hosts_file_means_no_fix()
     {
         _hosts = null;
@@ -320,6 +337,50 @@ public class DiagnosticsEngineTests
         var report = await engine.RunAsync([AuthService], null, CancellationToken.None);
         Assert.False(report.HostsReadable);
         Assert.Equal(Verdict.AllHealthy, report.Verdict);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("104.16.206.131 auth.riotgames.com\r\n")]
+    [InlineData("104.16.206.131 auth.riotgames.com mysite.local\r\n")]
+    [InlineData("104.16.206.131 auth.riotgames.com\r\n104.16.206.132 account.riotgames.com\r\n")]
+    [InlineData("1.2.3.4 account.riotgames.com example.org\r\n")]
+    public async Task Plan_always_applies_cleanly_to_the_hosts_it_was_built_from(string content)
+    {
+        var bytes = Encoding.ASCII.GetBytes(content);
+        _hosts = HostsDocument.Parse(bytes);
+        try
+        {
+            // Start from a state where RiotFix already pinned one host (when the file allows it).
+            _hosts.SetPins([new HostPin(Account, IPAddress.Parse("104.18.9.1"))], disableConflicts: true);
+        }
+        catch (HostsConflictException)
+        {
+        }
+
+        var start = _hosts.ToBytes();
+        _hosts = HostsDocument.Parse(start);
+
+        _dns.Set(Auth, "104.16.206.131").Set(Account, "104.18.9.1");
+        _prober.Fails(Auth, "104.16.206.131", ProbeFailure.TcpTimeout).Fails(Account, "104.18.9.1", ProbeFailure.TcpTimeout);
+        _cloudflare.Set(Auth, "104.18.4.4").Set(Account, "104.18.5.5");
+        _prober.Ok(Auth, "104.18.4.4").Ok(Account, "104.18.5.5");
+
+        var report = await Run();
+
+        // What the elevated helper does with the plan must never hit an unexpected conflict.
+        var target = HostsDocument.Parse(start);
+        target.SetPins(report.Plan.DesiredPins, report.Plan.RequiresConflictConsent);
+        Assert.True(report.Plan.HasChanges);
+        foreach (var pin in report.Plan.NewPins)
+        {
+            Assert.Contains(pin, target.GetPins());
+        }
+
+        // Rolling back afterwards restores the original bytes.
+        var reverted = HostsDocument.Parse(target.ToBytes());
+        reverted.RevertAll();
+        Assert.Equal(bytes, reverted.ToBytes());
     }
 
     [Fact]

@@ -30,6 +30,18 @@ public sealed class PhysicalFileSystem : IFileSystem
 
     public void WriteAllBytesDurable(string path, byte[] data)
     {
+        // Never write through a symbolic link / junction placed at the target path.
+        if (File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new IOException($"Refusing to write through a reparse point: {Path.GetFileName(path)}");
+        }
+
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory) && new DirectoryInfo(directory).Attributes.HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new IOException("Refusing to write into a directory that is a reparse point.");
+        }
+
         using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
         stream.Write(data);
         stream.Flush(flushToDisk: true);

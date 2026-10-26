@@ -69,13 +69,13 @@ internal static class SmokeTest
             window.Height = 520;
             Render(window, outputDir, "06-dark-min-size.png");
 
-            File.WriteAllText(Path.Combine(outputDir, "smoke-ok.txt"), $"RiotFix {AppInfo.Version} smoke test passed");
+            File.WriteAllText(Path.Join(outputDir, "smoke-ok.txt"), $"RiotFix {AppInfo.Version} smoke test passed");
             window.Close();
             return 0;
         }
         catch (Exception ex)
         {
-            File.WriteAllText(Path.Combine(outputDir, "smoke-error.txt"), ex.ToString());
+            File.WriteAllText(Path.Join(outputDir, "smoke-error.txt"), ex.ToString());
             log.Error("Smoke test failed.", ex);
             return 1;
         }
@@ -95,7 +95,7 @@ internal static class SmokeTest
         bitmap.Render(root);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        using var stream = File.Create(Path.Combine(dir, name));
+        using var stream = File.Create(Path.Join(dir, name));
         encoder.Save(stream);
     }
 

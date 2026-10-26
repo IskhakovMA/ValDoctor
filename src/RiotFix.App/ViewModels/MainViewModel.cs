@@ -40,7 +40,7 @@ internal sealed class AppComposition
 
     public DiagnosticsEngine CreateEngine() => new(
         new SystemResolver(),
-        TrustedResolvers.Defaults.Select(d => (ITrustedResolver)new DohResolver(d, DohHttp, TimeSpan.FromSeconds(6))).ToList(),
+        TrustedResolvers.Defaults.Select(d => (ITrustedResolver)new DohResolver(d, DohHttp, TimeSpan.FromSeconds(4))).ToList(),
         new TlsEndpointProber(new ProbeOptions { UserAgent = $"RiotFix/{AppInfo.Version} (connectivity check)" }),
         new SystemProxyDetector(),
         Hosts.Load,
@@ -235,8 +235,24 @@ internal sealed class MainViewModel : ObservableObject
             ProgressText = "Проверяем результат…";
             await FlushDnsAsync();
             await Task.Delay(TimeSpan.FromMilliseconds(700), ct);
-            var after = await RunDiagnosisAsync(ct);
-            ShowReport(after, Texts.AfterFix(after, plan.NewPins));
+            DiagnosisReport after;
+            try
+            {
+                after = await RunDiagnosisAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _app.Log.Error("Re-check after fix failed.", ex);
+                RefreshHostsState();
+                SetStatus(new StatusMessage(StatusTone.Warning, "Записи добавлены, проверка не удалась",
+                    "Файл hosts изменён, но повторная проверка завершилась ошибкой. Нажмите «Проверить снова» или «Отменить изменения»."));
+                FixReady = false;
+                return;
+            }
+
+            ShowReport(after, outcome.ExitCode == ElevatedExitCode.NoChanges
+                ? Texts.ForReport(after) with { Headline = "Записи уже были в файле hosts" }
+                : Texts.AfterFix(after, plan.NewPins));
         });
     }
 
@@ -360,6 +376,16 @@ internal sealed class MainViewModel : ObservableObject
 
         sb.AppendLine();
         sb.AppendLine("Адреса получены от доверенных DNS-серверов и дважды проверены: защищённое соединение с действительным сертификатом и ответ сервера.");
+
+        if (plan.RemovedPins.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Будут удалены прежние записи RiotFix, которые конфликтуют со сторонними строками:");
+            foreach (var pin in plan.RemovedPins)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"    {pin.Address}    {pin.Host}");
+            }
+        }
 
         if (plan.ConflictsToDisable.Count > 0)
         {

@@ -64,27 +64,40 @@ public static class FixPlanner
             }
         }
 
-        // Conflicts: third-party entries for any host in the desired block (this is exactly what
-        // HostsDocument.SetPins will check). Lines that also map unrelated names block that host.
-        var conflicts = hosts.FindConflicts(desired.Keys);
-        var blocked = conflicts.Where(c => !c.CanDisable).SelectMany(c => c.AffectedHosts).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (blocked.Count > 0)
+        // Conflicts: third-party entries for any host in the desired block (exactly what HostsDocument.SetPins checks).
+        // A line that also maps unrelated names blocks its hosts. Dropping a host can make another line
+        // non-disableable, so repeat until the set is stable.
+        var removed = new List<HostPin>();
+        IReadOnlyList<HostsConflict> conflicts;
+        while (true)
         {
+            conflicts = hosts.FindConflicts(desired.Keys);
+            var blocked = conflicts.Where(c => !c.CanDisable).SelectMany(c => c.AffectedHosts).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (blocked.Count == 0)
+            {
+                break;
+            }
+
             foreach (var host in blocked)
             {
                 newPins.RemoveAll(p => string.Equals(p.Host, host, StringComparison.OrdinalIgnoreCase));
                 replaced.RemoveAll(p => string.Equals(p.Host, host, StringComparison.OrdinalIgnoreCase));
+                if (hosts.GetPin(host) is { } existingPin)
+                {
+                    removed.Add(existingPin);
+                }
+
                 desired.Remove(host);
+                unfixable.RemoveAll(u => string.Equals(u.Host, host, StringComparison.OrdinalIgnoreCase));
                 unfixable.Add(new UnfixableDomain(host, UnfixableReason.ConflictCannotBeDisabled));
             }
-
-            conflicts = hosts.FindConflicts(desired.Keys);
         }
 
         return new FixPlan(
             desired.Values.OrderBy(p => RiotServices.OrderOf(p.Host)).ToList(),
             newPins,
             replaced,
+            removed,
             conflicts,
             unfixable);
     }

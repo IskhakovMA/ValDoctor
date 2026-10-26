@@ -19,6 +19,7 @@ internal static class Program
         //    It deliberately writes no log files: an elevated process must not write into user-controlled folders.
         if (ElevatedProtocol.IsElevatedInvocation(args))
         {
+            NativeHardening.RestrictDllSearchToSystem32();
             var hosts = new HostsFileService(new PhysicalFileSystem(), HostsLocator.GetHostsPath(), NullLog.Instance);
             return (int)ElevatedRunner.Run(args, hosts, DnsCache.Flush, NullLog.Instance);
         }

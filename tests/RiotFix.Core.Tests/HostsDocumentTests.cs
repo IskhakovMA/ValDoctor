@@ -135,6 +135,40 @@ public class HostsDocumentTests
         Assert.StartsWith("127.0.0.1 localhost\r\n" + HostsDocument.BeginMarker, doc.ToText(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("# a\n1.1.1.1 x.com")]
+    [InlineData("127.0.0.1 localhost")]
+    [InlineData("# only comment\r\nlast")]
+    public void Revert_restores_files_without_trailing_newline_exactly(string content)
+    {
+        var original = Ascii(content);
+        var doc = HostsDocument.Parse(original);
+        doc.SetPins([Auth], false);
+
+        var again = HostsDocument.Parse(doc.ToBytes());
+        Assert.False(again.SetPins([Auth], false).Changed);
+        again.RevertAll();
+        Assert.Equal(original, again.ToBytes());
+    }
+
+    [Fact]
+    public void Fully_qualified_names_with_trailing_dot_are_conflicts()
+    {
+        var doc = Doc("0.0.0.0 auth.riotgames.com.\r\n");
+        Assert.Single(doc.FindConflicts([Auth.Host]));
+    }
+
+    [Fact]
+    public void Partial_revert_keeps_line_disabled_while_another_of_its_hosts_stays_pinned()
+    {
+        var doc = Doc("9.9.9.9 auth.riotgames.com account.riotgames.com\r\n");
+        doc.SetPins([Auth, Account], disableConflicts: true);
+        doc.Revert([Auth.Host]);
+        Assert.Empty(doc.FindConflicts([Account.Host]));
+        doc.Revert([Account.Host]);
+        Assert.Equal("9.9.9.9 auth.riotgames.com account.riotgames.com\r\n", doc.ToText());
+    }
+
     [Fact]
     public void Lf_files_get_lf_lines()
     {
