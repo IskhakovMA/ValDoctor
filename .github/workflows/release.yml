@@ -1,5 +1,12 @@
 name: Release
 
+# Publishing is gated three ways (see docs/RELEASING.md):
+#   1. a tag ruleset lets only the repository owner create v* tags;
+#   2. the "validate" job refuses tags that do not point to a commit on main whose CI passed;
+#   3. the "publish" job runs in the protected "release" environment and waits for manual approval.
+# The release is created as a draft, its assets are checked, and only then is it published, so it is
+# complete before GitHub makes it immutable.
+
 on:
   push:
     tags: ["v*"]
@@ -15,9 +22,13 @@ jobs:
   version:
     name: Validate tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # to look up the CI run of the tagged commit
     outputs:
       version: ${{ steps.v.outputs.version }}
       prerelease: ${{ steps.v.outputs.prerelease }}
+      commit: ${{ steps.main.outputs.commit }}
     steps:
       - id: v
         env:
@@ -36,6 +47,38 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Checkout (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Require a tested commit on main
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          if [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" != "$commit" ]]; then
+            echo "::error::Tag $TAG does not point to the checked-out commit $commit." >&2; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
+            echo "::error::Tag $TAG points to $commit, which is not on main. Releases are made only from main." >&2; exit 1
+          fi
+          # The commit must have a successful CI run of its own on main (push or manual run), not just a passing PR.
+          passed="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              -f head_sha="$commit" -f branch=main -f status=success -f per_page=100 \
+            | jq --argjson repo "$GITHUB_REPOSITORY_ID" \
+              '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")
+                                 | select(.head_repository.id == $repo)] | length')"
+          if [[ "$passed" -lt 1 ]]; then
+            echo "::error::CI has not passed on main for $commit. Wait for CI on main to finish, then push the tag again." >&2; exit 1
+          fi
+          echo "Tag $TAG -> $commit: on main, CI passed."
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
   build:
     needs: version
     uses: ./.github/workflows/build.yml
@@ -46,8 +89,17 @@ jobs:
     name: Publish GitHub Release
     needs: [version, build]
     runs-on: ubuntu-latest
+    # Protected environment: required reviewer, deployments only from v* tags (configured in repository settings).
+    environment:
+      name: release
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
     steps:
       - name: Checkout (release notes)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,12 +118,55 @@ jobs:
         working-directory: dist
         run: sha256sum --check ValDoctor.exe.sha256
 
-      - name: Create release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      - name: Check the tag was not moved
         run: |
-          flags=(--verify-tag --title "ValDoctor $TAG" --notes-file .github/release-notes.md)
-          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); else flags+=(--latest); fi
+          set -euo pipefail
+          # For an annotated tag ls-remote also prints the peeled commit ("^{}"); it comes last.
+          remote="$(git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}" | tail -n 1 | cut -f1)"
+          if [[ "$remote" != "$COMMIT" ]]; then
+            echo "::error::Tag $TAG now points to '$remote', but $COMMIT was validated and built." >&2; exit 1
+          fi
+
+      - name: Create draft release
+        run: |
+          set -euo pipefail
+          draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          if [[ "$draft" == "false" ]]; then
+            echo "::error::Release $TAG is already published. Published releases are never changed." >&2; exit 1
+          fi
+          if [[ "$draft" == "true" ]]; then
+            echo "Removing the unpublished draft left by an earlier attempt (the tag is kept)."
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+          flags=(--draft --verify-tag --title "ValDoctor $TAG" --notes-file .github/release-notes.md)
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
           gh release create "$TAG" dist/ValDoctor.exe dist/ValDoctor.exe.sha256 --repo "$GITHUB_REPOSITORY" "${flags[@]}"
+
+      - name: Check draft assets
+        run: |
+          set -euo pipefail
+          id="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)"
+          assets="$(gh api "repos/$GITHUB_REPOSITORY/releases/$id/assets")"
+          if [[ "$(jq length <<< "$assets")" != "2" ]]; then
+            echo "::error::The draft must contain exactly ValDoctor.exe and ValDoctor.exe.sha256." >&2; exit 1
+          fi
+          mkdir -p uploaded
+          for name in ValDoctor.exe ValDoctor.exe.sha256; do
+            asset="$(jq --arg n "$name" '.[] | select(.name == $n) | .id' <<< "$assets")"
+            if [[ -z "$asset" ]]; then echo "::error::$name is missing from the draft." >&2; exit 1; fi
+            gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" > "uploaded/$name"
+            cmp "dist/$name" "uploaded/$name"
+          done
+          echo "Uploaded assets match the tested build."
+
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          flags=(--draft=false)
+          if [[ "$PRERELEASE" != "true" ]]; then flags+=(--latest); fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}"
+          immutable="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .immutable)"
+          echo "Published $TAG (immutable: $immutable)."
+          if [[ "$immutable" != "true" ]]; then
+            echo "::warning::Release immutability is off in repository settings: this release's assets can still be replaced."
+          fi
