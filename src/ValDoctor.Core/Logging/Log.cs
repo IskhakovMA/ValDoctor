@@ -31,8 +31,9 @@ public sealed class NullLog : IAppLog
 
 /// <summary>
 /// Local diagnostic log. Contains only Riot host names, Riot server IPs, error categories and timings.
-/// The user's name and profile path are scrubbed from every line; no credentials, tokens or
-/// local network addresses are ever logged. Nothing is sent anywhere.
+/// The user's profile path is scrubbed from every line; no credentials or tokens are ever logged. DNS answers
+/// are logged as received (they may contain sinkhole/private addresses returned by a resolver, which is exactly what
+/// support needs to see), but never the user's own interface addresses. Nothing is sent anywhere.
 /// </summary>
 public sealed class FileLog : IAppLog
 {

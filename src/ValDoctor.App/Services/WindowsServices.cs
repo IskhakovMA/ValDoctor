@@ -61,36 +61,24 @@ internal static class HostsLocator
     }
 }
 
-internal static partial class DnsCache
+internal static class DnsCache
 {
-    /// <summary>Clears the Windows DNS client cache (same as <c>ipconfig /flushdns</c>; no admin rights needed).</summary>
+    /// <summary>
+    /// Clears the Windows DNS client cache with <c>%SystemRoot%\System32\ipconfig.exe /flushdns</c>, started by its
+    /// absolute path (from the system API). No DLL is loaded by name, so the elevated helper cannot pick up a planted
+    /// dnsapi.dll from the download folder or the single-file extraction folder.
+    /// </summary>
     public static void Flush()
     {
-        try
-        {
-            if (DnsFlushResolverCache())
-            {
-                return;
-            }
-        }
-        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
-        {
-        }
-
         var ipconfig = Path.Join(Environment.SystemDirectory, "ipconfig.exe");
         using var process = Process.Start(new ProcessStartInfo(ipconfig, "/flushdns")
         {
             CreateNoWindow = true,
             UseShellExecute = false,
-            RedirectStandardOutput = true,
+            WorkingDirectory = Environment.SystemDirectory,
         });
         process?.WaitForExit(10_000);
     }
-
-    [LibraryImport("dnsapi.dll")]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DnsFlushResolverCache();
 }
 
 internal static partial class NativeHardening

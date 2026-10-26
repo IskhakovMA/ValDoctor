@@ -354,6 +354,9 @@ public sealed class HostsDocument
 
     internal static string PinLine(HostPin pin) => PinLine(pin, PinTagPrefix);
 
+    /// <summary>Tests only: a correctly tagged line for any address (used to model a forged line).</summary>
+    internal static string PinLineUnchecked(HostPin pin) => PinLine(pin, PinTagPrefix);
+
     private static string PinLine(HostPin pin, string tagPrefix) =>
         $"{pin.Address} {pin.Host.ToLowerInvariant()} {tagPrefix}{Hash($"{pin.Address}|{pin.Host.ToLowerInvariant()}")}";
 
@@ -478,7 +481,10 @@ public sealed class HostsDocument
         }
 
         var host = names[0].ToLowerInvariant();
-        if (!RiotServices.IsAllowed(host) || !string.Equals(tag, Hash($"{address}|{host}"), StringComparison.Ordinal))
+        // A correctly tagged line with a non-public address was never written by ValDoctor or RiotFix (both refuse such
+        // addresses), so it is treated as the user's own and never removed.
+        if (!RiotServices.IsAllowed(host) || !AddressPolicy.IsPublicUnicast(address) ||
+            !string.Equals(tag, Hash($"{address}|{host}"), StringComparison.Ordinal))
         {
             return false;
         }
@@ -516,8 +522,16 @@ public sealed class HostsDocument
             return false;
         }
 
+        // ValDoctor and RiotFix only ever disable entry lines whose names are ALL Riot hosts (CanDisable). The tag is an
+        // unkeyed hash, so anyone can forge it: restoring arbitrary forged lines would let a planted comment become an
+        // active entry for any name. Anything else is therefore an ordinary comment, never restored.
+        if (!TryParseEntry(candidate, out _, out var parsed) || parsed.Count == 0 || !parsed.All(RiotServices.IsAllowed))
+        {
+            return false;
+        }
+
         original = candidate;
-        names = TryParseEntry(candidate, out _, out var parsed) ? parsed : [];
+        names = parsed;
         return true;
     }
 

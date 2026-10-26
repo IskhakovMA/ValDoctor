@@ -60,9 +60,12 @@ internal sealed class AppComposition
     public FixPreflight CreatePreflight(Func<CancellationToken, Task<DiagnosisReport>> diagnose) =>
         new(diagnose, Prober, Hosts.Load, log: Log, systemDns: new SystemResolver());
 
+    /// <summary>When the GUI runs elevated, the update state stays in memory (nothing is written into the user profile).</summary>
     public UpdateChecker CreateUpdateChecker() => new(
         UpdateHttp,
-        new FileUpdateStateStore(Path.Join(AppInfo.DataDirectory, "update-state.json"), Path.Join(AppInfo.LegacyDataDirectory, "update-state.json")),
+        ElevationService.IsAdministrator()
+            ? new MemoryUpdateStateStore()
+            : new FileUpdateStateStore(Path.Join(AppInfo.DataDirectory, "update-state.json"), Path.Join(AppInfo.LegacyDataDirectory, "update-state.json")),
         AppInfo.SemanticVersion,
         log: Log);
 }

@@ -248,7 +248,27 @@ public sealed class DiagnosticsEngine
                       $"candidates=[{string.Join("; ", candidates.Select(c => $"{c.Address} verified={c.Verified} src={c.Sources.Count}"))}]");
         }
 
-        return new DomainDiagnosis(service, dns, probes, health, hostsOverride, trusted, candidates, retried);
+        // A pinned host resolves to its pin, so it always looks fine. Cross-check the pin against trusted DNS, so a pin
+        // that no trusted resolver vouches for (e.g. chosen by an older version from a hostile system DNS) is reported.
+        bool? pinConfirmed = null;
+        if (hostsOverride == HostsOverride.ManagedPin && hosts?.GetPin(host) is { } existingPin)
+        {
+            if (trusted.Count == 0)
+            {
+                trusted = await QueryTrustedAsync(host, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (trusted.Any(t => t.Responded))
+            {
+                pinConfirmed = trusted.Any(t => t.Responded && t.Addresses.Contains(existingPin.Address));
+                if (pinConfirmed == false)
+                {
+                    _log.Warn($"{host}: pinned address {existingPin.Address} is not returned by any trusted resolver.");
+                }
+            }
+        }
+
+        return new DomainDiagnosis(service, dns, probes, health, hostsOverride, trusted, candidates, retried, pinConfirmed);
     }
 
     private async Task<SystemDnsAnswer> ResolveSystemAsync(string host, CancellationToken cancellationToken)
@@ -393,8 +413,11 @@ public sealed class DiagnosticsEngine
 
         // Addresses that already failed end-to-end in this run are not retried.
         var failed = systemProbes.Where(p => !p.Healthy).Select(p => p.Address).ToHashSet();
+
+        // Only addresses a trusted resolver returned can ever be pinned (security audit M1), so only they compete for
+        // the bounded candidate slots. A healthy system answer is kept only to reuse its probe result.
         var selected = order
-            .Where(a => !failed.Contains(a))
+            .Where(a => !failed.Contains(a) && sources[a].Any(s => s != SystemDnsSource))
             .Select((a, index) => (Address: a, Index: index))
             .OrderBy(x => x.Address.AddressFamily == AddressFamily.InterNetwork ? 0 : 1)
             .ThenByDescending(x => sources[x.Address].Count)

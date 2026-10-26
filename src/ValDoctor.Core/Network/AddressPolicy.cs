@@ -80,6 +80,20 @@ public static class AddressPolicy
                 return false;
             }
 
+            // IETF assignments that IANA marks as not globally reachable: 2001:2::/48 benchmarking and the deprecated
+            // 2001:10::/28 ORCHID (Teredo 2001::/32 is rejected above).
+            if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 &&
+                ((b[3] == 0x02 && b[4] == 0x00 && b[5] == 0x00) || (b[3] & 0xF0) == 0x10))
+            {
+                return false;
+            }
+
+            // 3fff::/20 documentation (RFC 9637): 3fff:0000:: – 3fff:0fff:ffff:...
+            if (b[0] == 0x3F && b[1] == 0xFF && (b[2] & 0xF0) == 0x00)
+            {
+                return false;
+            }
+
             // 2002::/16 6to4 — embeds an IPv4 address, not a stable server address.
             return !(b[0] == 0x20 && b[1] == 0x02);
         }

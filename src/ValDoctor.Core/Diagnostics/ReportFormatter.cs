@@ -34,6 +34,10 @@ public static class ReportFormatter
             if (d.Override != HostsOverride.None)
             {
                 sb.Append("  Адрес задан в hosts: ").AppendLine(d.Override == HostsOverride.ManagedPin ? "запись ValDoctor" : "сторонняя запись");
+                if (d.ManagedPinConfirmedByTrustedDns == false)
+                {
+                    sb.AppendLine("  ! Закреплённый адрес не подтверждает ни один доверенный DNS. Если вы не уверены в нём, нажмите «Отменить изменения» и проверьте снова.");
+                }
             }
 
             if (d.DnsRetried)

@@ -44,6 +44,9 @@ public sealed record CandidateEvidence(IPAddress Address, IReadOnlyList<string> 
     /// <summary>Two consecutive healthy end-to-end probes with a valid certificate for the host.</summary>
     public bool Verified => Probes.Count >= RequiredConfirmations && Probes.All(p => p.Healthy);
 
+    /// <summary>At least one source is a trusted DNS-over-HTTPS resolver (not only the system DNS).</summary>
+    public bool ConfirmedByTrustedDns => Sources.Any(s => s != DiagnosticsEngine.SystemDnsSource);
+
     public TimeSpan AverageLatency => Probes.Count == 0 ? TimeSpan.MaxValue : TimeSpan.FromTicks((long)Probes.Average(p => p.Elapsed.Ticks));
 }
 
@@ -55,7 +58,8 @@ public sealed record DomainDiagnosis(
     HostsOverride Override,
     IReadOnlyList<TrustedDnsAnswer> TrustedAnswers,
     IReadOnlyList<CandidateEvidence> Candidates,
-    bool DnsRetried = false)
+    bool DnsRetried = false,
+    bool? ManagedPinConfirmedByTrustedDns = null)
 {
     public string Host => Service.Host;
 
@@ -66,8 +70,13 @@ public sealed record DomainDiagnosis(
 
     public bool IsEssential => Service.Role == ServiceRole.Essential;
 
+    /// <summary>
+    /// The address to pin. It must be verified AND returned by at least one trusted DNS-over-HTTPS resolver: the system
+    /// DNS is the component RiotFix/ValDoctor exists to distrust, so an address known only from it (e.g. an on-path
+    /// relay injected by a hostile resolver) is never written into hosts.
+    /// </summary>
     public CandidateEvidence? BestCandidate => Candidates
-        .Where(c => c.Verified)
+        .Where(c => c.Verified && c.ConfirmedByTrustedDns)
         .OrderBy(c => c.Address.AddressFamily == AddressFamily.InterNetwork ? 0 : 1)
         .ThenByDescending(c => c.Sources.Count)
         .ThenBy(c => c.AverageLatency)
