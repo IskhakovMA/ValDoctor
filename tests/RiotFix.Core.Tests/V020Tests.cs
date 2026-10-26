@@ -74,6 +74,24 @@ public class ClassificationTests
     }
 
     [Theory]
+    [InlineData("10.10.34.35")]
+    [InlineData("127.0.0.1")]
+    [InlineData("0.0.0.0")]
+    public async Task Non_public_dns_answer_next_to_a_good_address_is_not_reported_as_ok(string injected)
+    {
+        // Typical ISP block page injection: never connected to, never treated as harmless.
+        _dns.Set(Auth, injected, "104.16.120.50");
+        _prober.Ok(Auth, "104.16.120.50");
+
+        var report = await Run(Auth);
+
+        Assert.Equal(DomainHealth.Degraded, report.Domains[0].Health);
+        Assert.NotEqual(Verdict.AllHealthy, report.Verdict);
+        Assert.Equal("104.16.120.50", report.Plan.NewPins.Single().Address.ToString());
+        Assert.DoesNotContain(_prober.Probed, k => k.EndsWith("|" + injected, StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData(404)]
     [InlineData(405)]
     [InlineData(401)]
@@ -108,6 +126,22 @@ public class ClassificationTests
         Assert.Equal(StatusTone.Warning, message.Tone);
         Assert.Contains("не всегда мешает входу", message.Body, StringComparison.Ordinal);
         Assert.DoesNotContain("невозможен", message.Body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task No_fix_text_names_the_real_reason()
+    {
+        _dns.Set(Auth, "104.16.120.50");
+        _prober.Fails(Auth, "104.16.120.50", ProbeFailure.TlsTimeout, ProbeStage.TcpConnected);
+        _cloudflare.Set(Auth, "104.16.119.50");
+        _prober.Ok(Auth, "104.16.119.50");
+        var engine = new DiagnosticsEngine(_dns, [_cloudflare], _prober, new FakeProxy(),
+            () => HostsDocument.Parse(Encoding.ASCII.GetBytes("104.16.120.50 auth.riotgames.com example.com\r\n")));
+
+        var report = await engine.RunAsync([RiotServices.Find(Auth)!], null, CancellationToken.None);
+
+        Assert.Equal(Verdict.ProblemsWithoutFix, report.Verdict);
+        Assert.Contains("сторонняя строка", Texts.ForReport(report).Body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -297,6 +331,29 @@ public class FixPreflightTests
         Assert.Equal(1, _diagnoses);
         Assert.Equal(PreflightStatus.NoLongerNeeded, result.Status);
         Assert.Equal(UnfixableReason.ConflictCannotBeDisabled, result.Report.Plan.Unfixable.Single().Reason);
+    }
+
+    [Fact]
+    public async Task Prober_exception_during_preflight_is_treated_as_a_dead_address()
+    {
+        var report = await Initial();
+        _prober.On(Auth, "104.16.120.50", (_, _) => throw new ObjectDisposedException("socket"));
+
+        var result = await Preflight().CheckAsync(report, CancellationToken.None);
+
+        Assert.Equal(1, _diagnoses);
+        Assert.NotEqual(PreflightStatus.Ready, result.Status);
+    }
+
+    [Fact]
+    public async Task Clock_moving_backwards_makes_the_result_stale()
+    {
+        var report = await Initial();
+        _time.Now = T0.AddHours(-2);
+
+        await Preflight().CheckAsync(report, CancellationToken.None);
+
+        Assert.Equal(1, _diagnoses);
     }
 
     [Fact]

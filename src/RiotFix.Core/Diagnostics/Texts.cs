@@ -48,7 +48,7 @@ public static class Texts
         var essentialDown = unreachable.Where(d => d.IsEssential).ToList();
         var partial = report.Domains.Count(d => d.Health == DomainHealth.PartiallyReachable);
         var partialNote = partial > 0
-            ? $" У {partial} {Plural(partial, "сервиса", "сервисов", "сервисов")} не отвечает часть адресов, но рабочие адреса есть — Windows переключается на них сама."
+            ? $" У {partial} {Plural(partial, "сервиса", "сервисов", "сервисов")} часть адресов сразу отклоняет соединение, но рабочие адреса есть — клиент обычно сразу переходит к ним."
             : string.Empty;
 
         return report.Verdict switch
@@ -57,7 +57,7 @@ public static class Texts
                 $"Все {Services(total)} Riot отвечают по сети.{partialNote} {ScopeNote}"),
             Verdict.FixAvailable => new(StatusTone.Warning,
                 essentialDown.Count > 0 ? "Найдены проблемы с подключением" : "Основные сервисы отвечают, есть ограничения",
-                $"Не отвечают {unreachable.Count} из {Services(total)}" +
+                $"Проблемы с подключением у {unreachable.Count} из {Services(total)}" +
                 (essentialDown.Count == 0 ? " (только вспомогательные)" : string.Empty) +
                 $". Для {report.Plan.NewPins.Count} найден проверенный рабочий адрес." +
                 (report.Plan.Unfixable.Count > 0
@@ -67,11 +67,11 @@ public static class Texts
                     ? " Если Riot Client у вас работает, исправление не обязательно."
                     : " Нажмите «Исправить», чтобы RiotFix добавил записи в файл hosts.")),
             Verdict.LimitedConnectivity => new(StatusTone.Warning, "Основные сервисы отвечают",
-                $"Сервисы входа, настроек клиента и доступа к играм отвечают. Не отвечают вспомогательные: {HostList(unreachable)}. " +
-                "Проверенного рабочего адреса для них нет, поэтому файл hosts не изменяется. " +
-                "Недоступность этих сервисов не всегда мешает входу: на реальном ПК вход и игра работали и в такой ситуации."),
+                $"Основные сервисы (вход, настройки клиента, доступ к играм) отвечают. Проблемы у вспомогательных: {HostList(unreachable)}. " +
+                $"{NoFixReason(report)} " +
+                "Недоступность этих сервисов не всегда мешает входу: известен случай, когда вход и игра работали в такой же ситуации."),
             Verdict.ProblemsWithoutFix => new(StatusTone.Error, "Найдены проблемы, исправления нет",
-                $"Не отвечают {unreachable.Count} из {Services(total)}: {HostList(unreachable)}. RiotFix не нашёл адрес, который прошёл бы проверку, поэтому файл hosts изменён не будет. " +
+                $"Проблемы с подключением у {unreachable.Count} из {Services(total)}: {HostList(unreachable)}. {NoFixReason(report)} " +
                 "Это сетевая проверка: она не доказывает, что вход невозможен. Возможные причины — блокировка, которую не обходит смена адреса, или временный сбой сервисов."),
             Verdict.ServiceErrors => new(StatusTone.Warning, "Сервисы отвечают с ошибками",
                 "Серверы Riot доступны по сети, но возвращают ошибки (HTTP 5xx). Скорее всего, это проблема на стороне Riot Games — изменение hosts здесь не поможет."),
@@ -121,6 +121,23 @@ public static class Texts
     }
 
     private static string HostList(IEnumerable<DomainDiagnosis> domains) => string.Join(", ", domains.Select(d => d.Host));
+
+    /// <summary>Why the hosts file is not changed, from the planner's actual reasons.</summary>
+    private static string NoFixReason(DiagnosisReport report)
+    {
+        var reasons = report.Plan.Unfixable.Select(u => u.Reason).ToHashSet();
+        if (reasons.Contains(UnfixableReason.HostsUnreadable))
+        {
+            return "Файл hosts не удалось прочитать, поэтому RiotFix его не изменяет.";
+        }
+
+        if (reasons.Contains(UnfixableReason.ConflictCannotBeDisabled) && !reasons.Contains(UnfixableReason.NoVerifiedCandidate))
+        {
+            return "В файле hosts есть сторонняя строка, которая затрагивает и другие сайты, — RiotFix её не трогает и hosts не изменяет.";
+        }
+
+        return "Адреса, который прошёл бы проверку, не найдено, поэтому файл hosts изменён не будет.";
+    }
 
     public static string Health(DomainHealth health) => health switch
     {

@@ -86,11 +86,26 @@ public sealed class FixPreflight
     private static HashSet<string> Keys(IEnumerable<HostPin> pins) =>
         pins.Select(p => $"{p.Host.ToLowerInvariant()}|{p.Address}").ToHashSet(StringComparer.Ordinal);
 
+    private async Task<bool> ProbeHealthyAsync(HostPin pin, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await _prober.ProbeAsync(pin.Host, pin.Address, cancellationToken).ConfigureAwait(false)).Healthy;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warn($"Preflight: probe of {pin.Host} {pin.Address} failed ({ex.GetType().Name}).");
+            return false;
+        }
+    }
+
     private async Task<string?> FindStalenessAsync(DiagnosisReport report, CancellationToken cancellationToken)
     {
-        if (_time.GetUtcNow() - report.StartedAt.ToUniversalTime() > MaxAge)
+        var age = _time.GetUtcNow() - report.StartedAt.ToUniversalTime();
+        if (age > MaxAge || age < TimeSpan.Zero)
         {
-            return "result is older than 5 minutes";
+            // A negative age means the clock moved backwards: the age is unknown, so treat it as stale.
+            return "result is older than 5 minutes (or the clock changed)";
         }
 
         HostsDocument? hosts;
@@ -112,9 +127,9 @@ public sealed class FixPreflight
         budget.CancelAfter(ProbeBudget);
         try
         {
-            var probes = await Task.WhenAll(report.Plan.NewPins.Select(pin => _prober.ProbeAsync(pin.Host, pin.Address, budget.Token)))
+            var healthy = await Task.WhenAll(report.Plan.NewPins.Select(pin => ProbeHealthyAsync(pin, budget.Token)))
                 .ConfigureAwait(false);
-            var failed = probes.Zip(report.Plan.NewPins).Where(x => !x.First.Healthy).Select(x => x.Second).ToList();
+            var failed = healthy.Zip(report.Plan.NewPins).Where(x => !x.First).Select(x => x.Second).ToList();
             return failed.Count == 0
                 ? null
                 : $"address no longer answers: {string.Join(", ", failed.Select(p => $"{p.Host}={p.Address}"))}";

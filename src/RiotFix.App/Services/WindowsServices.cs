@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using Microsoft.Win32;
@@ -18,8 +19,11 @@ internal static class AppInfo
 
     public const string RepositoryUrl = "https://github.com/IskhakovMA/riotfix";
 
+    /// <summary>Full version including any prerelease suffix (from the informational version, "+commit" removed).</summary>
     public static SemVersion SemanticVersion { get; } =
-        typeof(AppInfo).Assembly.GetName().Version is { } v ? SemVersion.Create(v.Major, v.Minor, v.Build) : SemVersion.Create(0, 0, 0);
+        SemVersion.TryParse(typeof(AppInfo).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion, out var full)
+            ? full
+            : typeof(AppInfo).Assembly.GetName().Version is { } v ? SemVersion.Create(v.Major, v.Minor, v.Build) : SemVersion.Create(0, 0, 0);
 
     public static string DataDirectory { get; } =
         Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RiotFix");

@@ -168,8 +168,12 @@ public sealed class DiagnosticsEngine
         return relevant.Any(p => p.Reachable) ? DomainHealth.ServerError : DomainHealth.Failed;
     }
 
+    /// <summary>
+    /// Failures the client gets immediately, so it moves on to the next address. A non-public DNS answer is NOT one:
+    /// RiotFix never connects to it, it may black-hole or fail TLS for a long time, and it usually means DNS tampering.
+    /// </summary>
     internal static bool IsFastConnectFailure(ProbeFailure failure) =>
-        failure is ProbeFailure.TcpRefused or ProbeFailure.TcpReset or ProbeFailure.NetworkUnreachable or ProbeFailure.NotPublicAddress;
+        failure is ProbeFailure.TcpRefused or ProbeFailure.TcpReset or ProbeFailure.NetworkUnreachable;
 
     private async Task<DomainDiagnosis> DiagnoseAsync(
         RiotService service,

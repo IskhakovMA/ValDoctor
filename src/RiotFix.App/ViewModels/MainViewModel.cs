@@ -419,7 +419,9 @@ internal sealed class MainViewModel : ObservableObject
 
     private async Task<DiagnosisReport> RunDiagnosisAsync(CancellationToken ct)
     {
-        var progress = new Progress<DiagnosisProgress>(p => ProgressText = p.Message);
+        // May be called from a thread-pool continuation (preflight): always marshal progress to the UI thread.
+        var dispatcher = Application.Current.Dispatcher;
+        var progress = new Progress<DiagnosisProgress>(p => dispatcher.BeginInvoke(() => ProgressText = p.Message));
         var engine = _app.CreateEngine();
         return await Task.Run(() => engine.RunAsync(RiotServices.All, progress, ct), ct);
     }

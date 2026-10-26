@@ -11,8 +11,8 @@ public enum DomainHealth
     Healthy,
 
     /// <summary>
-    /// Some addresses work; the others fail immediately at connect time (refused / no route / reset / non-public).
-    /// Windows and HTTP clients move on to the next address at once, so this is not treated as a problem.
+    /// Some addresses work; the others fail immediately at connect time (refused / no route / reset).
+    /// Clients move on to the next address at once, so this is not treated as a problem.
     /// </summary>
     PartiallyReachable,
 
