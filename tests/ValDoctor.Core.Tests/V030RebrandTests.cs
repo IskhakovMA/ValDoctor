@@ -310,6 +310,22 @@ public partial class ProductNameTests
         Assert.Empty(offenders);
     }
 
+    [Fact]
+    public void Affiliation_note_is_not_shown_in_the_app_but_stays_in_public_docs()
+    {
+        var root = Root();
+        foreach (var file in Directory.GetFiles(Path.Join(root, "src"), "*.*", SearchOption.AllDirectories)
+                     .Where(f => (f.EndsWith(".xaml", StringComparison.Ordinal) || f.EndsWith(".cs", StringComparison.Ordinal)) &&
+                                 !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)))
+        {
+            Assert.DoesNotContain("Не связано с Riot Games", File.ReadAllText(file), StringComparison.Ordinal);
+        }
+
+        // The independence statement remains in the README and in the release notes template.
+        Assert.Contains("не связан с Riot Games", File.ReadAllText(Path.Join(root, "README.md")), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("не связан с Riot Games", File.ReadAllText(Path.Join(root, ".github", "release-notes.md")), StringComparison.OrdinalIgnoreCase);
+    }
+
     [GeneratedRegex("\"(?:[^\"\\\\]|\\\\.)*\"")]
     private static partial Regex StringLiteral();
 

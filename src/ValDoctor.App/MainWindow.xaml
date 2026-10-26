@@ -109,7 +109,6 @@
         <Run Text="{Binding Version, Mode=OneWay}" />
         <Run Text=" · " />
         <Hyperlink Command="{Binding OpenRepositoryCommand}" Foreground="{DynamicResource AccentLink}">Исходный код</Hyperlink>
-        <Run Text=" · Не связано с Riot Games" />
       </TextBlock>
     </Grid>
   </Grid>
