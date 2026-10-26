@@ -79,6 +79,15 @@ jobs:
           echo "Tag $TAG -> $commit: on main, CI passed."
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
+      - name: Require release notes for this version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The notes file is published as is, so it must be written for this exact version.
+          if ! grep -Fxq "<!-- version: ${TAG#v} -->" .github/release-notes.md; then
+            echo "::error::.github/release-notes.md is not marked for ${TAG#v}. Update the notes and the version line on main, then tag again." >&2; exit 1
+          fi
+
   build:
     needs: version
     uses: ./.github/workflows/build.yml
