@@ -9,7 +9,29 @@ public sealed class FakeSystemResolver : ISystemResolver
 {
     private readonly Dictionary<string, SystemDnsAnswer> _answers = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<string, int> _failuresLeft = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _calls = new(StringComparer.OrdinalIgnoreCase);
+
     public SystemDnsAnswer Default { get; set; } = new([], DnsFailureKind.NotFound);
+
+    public int CallsTo(string host)
+    {
+        lock (_calls)
+        {
+            return _calls.TryGetValue(host, out var n) ? n : 0;
+        }
+    }
+
+    /// <summary>The next <paramref name="times"/> lookups of <paramref name="host"/> fail, then the normal answer returns.</summary>
+    public FakeSystemResolver FailFirst(string host, int times)
+    {
+        lock (_calls)
+        {
+            _failuresLeft[host] = times;
+        }
+
+        return this;
+    }
 
     public FakeSystemResolver Set(string host, params string[] addresses)
     {
@@ -26,6 +48,16 @@ public sealed class FakeSystemResolver : ISystemResolver
     public Task<SystemDnsAnswer> ResolveAsync(string host, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        lock (_calls)
+        {
+            _calls[host] = (_calls.TryGetValue(host, out var n) ? n : 0) + 1;
+            if (_failuresLeft.TryGetValue(host, out var left) && left > 0)
+            {
+                _failuresLeft[host] = left - 1;
+                return Task.FromResult(new SystemDnsAnswer([], DnsFailureKind.Timeout, "transient"));
+            }
+        }
+
         return Task.FromResult(_answers.TryGetValue(host, out var a) ? a : Default);
     }
 }

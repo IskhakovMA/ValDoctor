@@ -10,4 +10,7 @@ internal sealed class MessageBoxDialogs(Window owner) : IDialogs
 
     public void Info(string title, string message) =>
         MessageBox.Show(owner, message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+
+    public void ShowDetails(object dataContext) =>
+        new DetailsWindow { Owner = owner, DataContext = dataContext }.ShowDialog();
 }

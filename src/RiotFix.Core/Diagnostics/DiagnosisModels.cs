@@ -54,7 +54,8 @@ public sealed record DomainDiagnosis(
     DomainHealth Health,
     HostsOverride Override,
     IReadOnlyList<TrustedDnsAnswer> TrustedAnswers,
-    IReadOnlyList<CandidateEvidence> Candidates)
+    IReadOnlyList<CandidateEvidence> Candidates,
+    bool DnsRetried = false)
 {
     public string Host => Service.Host;
 

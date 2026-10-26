@@ -9,6 +9,9 @@ namespace RiotFix.Core.Diagnostics;
 
 public sealed record DiagnosticsOptions
 {
+    /// <summary>The timings used by the real application.</summary>
+    public static DiagnosticsOptions Product { get; } = new();
+
     public int MaxSystemIPv4 { get; init; } = 4;
 
     public int MaxSystemIPv6 { get; init; } = 2;
@@ -19,6 +22,18 @@ public sealed record DiagnosticsOptions
     public int MaxParallelProbes { get; init; } = 8;
 
     public TimeSpan DnsTimeout { get; init; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>
+    /// Pauses before re-asking the system DNS after a failed lookup. A real log (26.10.2026) showed the system DNS
+    /// not answering for all six hosts at once and working again seconds later; without retries RiotFix proposed six
+    /// unnecessary hosts entries. A persistent failure still fails after the retries and gets a verified fix.
+    /// <para>
+    /// The Windows DNS cache is deliberately NOT flushed during a check: the check must not change system state.
+    /// A timeout is not cached, so a plain retry reaches the DNS server again; a cached negative answer
+    /// ("name not found") is a persistent answer, which the verified fix handles.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<TimeSpan> DnsRetryDelays { get; init; } = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3)];
 
     public TimeSpan TrustedDnsTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
@@ -59,6 +74,22 @@ public sealed class DiagnosticsEngine
         _options = options ?? new DiagnosticsOptions();
         _log = log ?? NullLog.Instance;
     }
+
+    /// <summary>The options this engine runs with (exposed so tests can compare test and app configuration).</summary>
+    public DiagnosticsOptions Options => _options;
+
+    /// <summary>
+    /// The engine exactly as the application uses it: product timings (including DNS retries), no test shortcuts.
+    /// AppComposition must create engines only through this method.
+    /// </summary>
+    public static DiagnosticsEngine CreateDefault(
+        ISystemResolver system,
+        IReadOnlyList<ITrustedResolver> trusted,
+        IEndpointProber prober,
+        IProxyDetector proxy,
+        Func<HostsDocument?> loadHosts,
+        IRiotFixLog log) =>
+        new(system, trusted, prober, proxy, loadHosts, DiagnosticsOptions.Product, log);
 
     public async Task<DiagnosisReport> RunAsync(
         IReadOnlyList<RiotService> services,
@@ -190,6 +221,15 @@ public sealed class DiagnosticsEngine
             : HostsOverride.None;
 
         var dns = await ResolveSystemAsync(host, cancellationToken).ConfigureAwait(false);
+        var retried = false;
+        for (var i = 0; !dns.Success && i < _options.DnsRetryDelays.Count; i++)
+        {
+            retried = true;
+            await Task.Delay(_options.DnsRetryDelays[i], cancellationToken).ConfigureAwait(false);
+            dns = await ResolveSystemAsync(host, cancellationToken).ConfigureAwait(false);
+            _log.Info($"{host}: system DNS retry {i + 1}: {dns.Failure}.");
+        }
+
         var addresses = SelectSystemAddresses(dns.Addresses);
         var probes = await Task.WhenAll(addresses.Select(a => ProbeAsync(host, a, throttle, cancellationToken))).ConfigureAwait(false);
         var health = Classify(dns, probes);
@@ -200,14 +240,14 @@ public sealed class DiagnosticsEngine
         IReadOnlyList<CandidateEvidence> candidates = [];
         if (health is DomainHealth.Degraded or DomainHealth.Failed)
         {
-            progress?.Report(new DiagnosisProgress(0, total, $"Ищем рабочий адрес для {host}…"));
+            progress?.Report(new DiagnosisProgress(0, total, "Ищем рабочий вариант подключения…"));
             trusted = await QueryTrustedAsync(host, cancellationToken).ConfigureAwait(false);
             candidates = await VerifyCandidatesAsync(host, hostsOverride, probes, trusted, throttle, cancellationToken).ConfigureAwait(false);
             _log.Info($"{host}: trusted=[{string.Join("; ", trusted.Select(t => $"{t.ResolverName}:{(t.Responded ? string.Join(",", t.Addresses) : "no answer " + t.Error)}"))}] " +
                       $"candidates=[{string.Join("; ", candidates.Select(c => $"{c.Address} verified={c.Verified} src={c.Sources.Count}"))}]");
         }
 
-        return new DomainDiagnosis(service, dns, probes, health, hostsOverride, trusted, candidates);
+        return new DomainDiagnosis(service, dns, probes, health, hostsOverride, trusted, candidates, retried);
     }
 
     private async Task<SystemDnsAnswer> ResolveSystemAsync(string host, CancellationToken cancellationToken)

@@ -19,7 +19,7 @@ public class DiagnosticsEngineTests
     private readonly FakeTrustedResolver _google = new("Google Public DNS");
     private readonly FakeProber _prober = new();
     private HostsDocument? _hosts = HostsDocument.Empty();
-    private DiagnosticsOptions _options = new();
+    private DiagnosticsOptions _options = TestOptions.Fast;
 
     private DiagnosticsEngine Engine() => new(_dns, [_cloudflare, _google], _prober, new FakeProxy(), () => _hosts, _options);
 
@@ -147,7 +147,7 @@ public class DiagnosticsEngineTests
     [Fact]
     public async Task Candidate_search_is_bounded()
     {
-        _options = new DiagnosticsOptions { MaxCandidatesPerHost = 3 };
+        _options = TestOptions.Fast with { MaxCandidatesPerHost = 3 };
         _dns.Fail(Auth, DnsFailureKind.NotFound);
         _cloudflare.Set(Auth, Enumerable.Range(1, 20).Select(i => $"104.18.8.{i}").ToArray());
 
@@ -200,7 +200,7 @@ public class DiagnosticsEngineTests
     [Fact]
     public async Task Hanging_probe_times_out_within_budget()
     {
-        _options = new DiagnosticsOptions { ProbeBudget = TimeSpan.FromMilliseconds(200) };
+        _options = TestOptions.Fast with { ProbeBudget = TimeSpan.FromMilliseconds(200) };
         _dns.Set(Auth, "104.16.1.1");
         _prober.Hangs(Auth, "104.16.1.1");
 
@@ -331,7 +331,7 @@ public class DiagnosticsEngineTests
     public async Task Hosts_read_errors_are_handled()
     {
         var engine = new DiagnosticsEngine(_dns, [_cloudflare], _prober, new FakeProxy(),
-            () => throw new HostsAccessException(HostsErrorKind.AccessDenied, "denied"));
+            () => throw new HostsAccessException(HostsErrorKind.AccessDenied, "denied"), TestOptions.Fast);
         _dns.Set(Auth, "104.16.1.1");
         _prober.Ok(Auth, "104.16.1.1");
 

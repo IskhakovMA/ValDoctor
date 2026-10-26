@@ -35,14 +35,17 @@ public sealed class FixPreflight
     private readonly Func<HostsDocument?> _loadHosts;
     private readonly TimeProvider _time;
     private readonly IRiotFixLog _log;
+    private readonly ISystemResolver? _systemDns;
 
     public FixPreflight(
         Func<CancellationToken, Task<DiagnosisReport>> diagnose,
         IEndpointProber prober,
         Func<HostsDocument?> loadHosts,
         TimeProvider? time = null,
-        IRiotFixLog? log = null)
+        IRiotFixLog? log = null,
+        ISystemResolver? systemDns = null)
     {
+        _systemDns = systemDns;
         _diagnose = diagnose;
         _prober = prober;
         _loadHosts = loadHosts;
@@ -53,6 +56,15 @@ public sealed class FixPreflight
     public static TimeSpan MaxAge { get; } = TimeSpan.FromMinutes(5);
 
     public static TimeSpan ProbeBudget { get; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// A plan built on a system DNS failure is re-diagnosed in full once its diagnosis is this old. A younger plan
+    /// gets a quick system DNS lookup instead (see <see cref="FindStalenessAsync"/>), which is enough to notice that the
+    /// DNS works again without running two full diagnoses back to back.
+    /// </summary>
+    public static TimeSpan DnsRecheckAfter { get; } = TimeSpan.FromSeconds(10);
+
+    public static TimeSpan QuickDnsTimeout { get; } = TimeSpan.FromSeconds(5);
 
     public async Task<PreflightResult> CheckAsync(DiagnosisReport report, CancellationToken cancellationToken)
     {
@@ -99,6 +111,32 @@ public sealed class FixPreflight
         }
     }
 
+    private async Task<bool> AnySystemDnsAnswersAsync(IReadOnlyList<string> hosts, CancellationToken cancellationToken)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(QuickDnsTimeout);
+        var lookups = hosts.Select(async host =>
+        {
+            try
+            {
+                var answer = await _systemDns!.ResolveAsync(host, budget.Token).WaitAsync(budget.Token).ConfigureAwait(false);
+                return answer.Success;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return false; // still not answering
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.Warn($"Preflight: system DNS lookup of {host} failed ({ex.GetType().Name}).");
+                return false;
+            }
+        });
+
+        var results = await Task.WhenAll(lookups).ConfigureAwait(false);
+        return results.Any(ok => ok);
+    }
+
     private async Task<string?> FindStalenessAsync(DiagnosisReport report, CancellationToken cancellationToken)
     {
         var age = _time.GetUtcNow() - report.StartedAt.ToUniversalTime();
@@ -106,6 +144,34 @@ public sealed class FixPreflight
         {
             // A negative age means the clock moved backwards: the age is unknown, so treat it as stale.
             return "result is older than 5 minutes (or the clock changed)";
+        }
+
+        // A plan that exists only because the system DNS failed is never trusted blindly: such failures are often
+        // short-lived, so check from scratch whether the system DNS works again before writing anything.
+        // A plan that exists only because the system DNS failed must never be written once the DNS works again.
+        // Every preflight (also the last one right before UAC) checks that:
+        //  - with a system resolver: one quick lookup per affected host; an answer means the plan is stale;
+        //    still failing and older than DnsRecheckAfter -> full diagnosis (as before);
+        //  - without one: always a full diagnosis.
+        var newHosts = report.Plan.NewPins.Select(p => p.Host).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var dnsFailedHosts = report.Domains.Where(d => newHosts.Contains(d.Host) && !d.SystemDns.Success).Select(d => d.Host).ToList();
+        if (dnsFailedHosts.Count > 0)
+        {
+            if (_systemDns is null)
+            {
+                return "the fix is based on a system DNS failure";
+            }
+
+            if (await AnySystemDnsAnswersAsync(dnsFailedHosts, cancellationToken).ConfigureAwait(false))
+            {
+                return "the system DNS answers again";
+            }
+
+            var sinceFinished = _time.GetUtcNow() - (report.StartedAt.ToUniversalTime() + report.Duration);
+            if (sinceFinished >= DnsRecheckAfter || sinceFinished < TimeSpan.Zero)
+            {
+                return "the fix is based on a system DNS failure";
+            }
         }
 
         HostsDocument? hosts;

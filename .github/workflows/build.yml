@@ -6,7 +6,7 @@ on:
       version:
         description: Version number without the "v" prefix
         type: string
-        default: 0.2.0
+        default: 0.2.1
 
 permissions:
   contents: read
@@ -65,7 +65,7 @@ jobs:
           if (Test-Path "$out\smoke-error.txt") { Get-Content "$out\smoke-error.txt" }
           if ($p.ExitCode -ne 0) { throw "Smoke test exit code $($p.ExitCode)" }
           if (-not (Test-Path "$out\smoke-ok.txt")) { throw "smoke-ok.txt missing" }
-          if ((Get-ChildItem "$out\*.png").Count -lt 8) { throw "Expected 8 screenshots" }
+          if ((Get-ChildItem "$out\*.png").Count -lt 10) { throw "Expected 10 screenshots" }
 
       - name: Smoke test - elevated helper rejects invalid requests
         shell: pwsh
