@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ValDoctor.App/ValDoctor.App.csproj" />
+    <Project Path="src/ValDoctor.Core/ValDoctor.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ValDoctor.Core.Tests/ValDoctor.Core.Tests.csproj" />
+  </Folder>
+</Solution>

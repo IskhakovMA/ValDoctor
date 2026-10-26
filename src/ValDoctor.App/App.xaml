@@ -1,0 +1,14 @@
+<Application x:Class="ValDoctor.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnMainWindowClose">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <!-- Index 0 is replaced at runtime by Light.xaml or Dark.xaml (ThemeManager). -->
+        <ResourceDictionary Source="Themes/Light.xaml" />
+        <ResourceDictionary Source="Themes/Styles.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>
