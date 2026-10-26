@@ -11,11 +11,11 @@
     <DebugType>embedded</DebugType>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
 
-    <Version Condition="'$(Version)' == ''">0.2.1</Version>
-    <Product>RiotFix</Product>
-    <Company>RiotFix contributors</Company>
-    <Authors>RiotFix contributors</Authors>
-    <Copyright>Copyright (c) 2026 RiotFix contributors</Copyright>
+    <Version Condition="'$(Version)' == ''">0.3.0</Version>
+    <Product>ValDoctor</Product>
+    <Company>ValDoctor contributors</Company>
+    <Authors>ValDoctor contributors</Authors>
+    <Copyright>Copyright (c) 2026 ValDoctor contributors (formerly RiotFix)</Copyright>
     <NeutralLanguage>ru-RU</NeutralLanguage>
   </PropertyGroup>
 </Project>

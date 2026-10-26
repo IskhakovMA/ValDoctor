@@ -1,5 +1,5 @@
 name: Сообщить о проблеме
-description: RiotFix не помог, показал ошибку или повёл себя неожиданно
+description: ValDoctor не помог, показал ошибку или повёл себя неожиданно
 labels: [bug]
 body:
   - type: markdown
@@ -9,7 +9,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Версия RiotFix
+      label: Версия ValDoctor
       placeholder: "0.1.0"
     validations:
       required: true
@@ -29,7 +29,7 @@ body:
     id: report
     attributes:
       label: Отчёт о проверке
-      description: В RiotFix нажмите кнопку ⓘ в правом верхнем углу → «Скопировать отчёт» и вставьте сюда. Отчёт не содержит личных данных.
+      description: В ValDoctor нажмите кнопку ⓘ в правом верхнем углу → «Скопировать отчёт» и вставьте сюда. Отчёт не содержит личных данных.
       render: text
   - type: dropdown
     id: game
