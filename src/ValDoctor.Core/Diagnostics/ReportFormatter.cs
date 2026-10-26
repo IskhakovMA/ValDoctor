@@ -21,6 +21,10 @@ public static class ReportFormatter
         sb.Append("Файл hosts: ").AppendLine(!report.HostsReadable ? "не удалось прочитать"
             : report.CurrentPins.Count > 0 ? $"есть записи ValDoctor ({report.CurrentPins.Count})"
             : report.HasManagedContent ? "есть служебные строки ValDoctor" : "записей ValDoctor нет");
+        if (report.HasLegacyRiotFixContent)
+        {
+            sb.AppendLine("  В том числе строки, записанные RiotFix (прежнее название ValDoctor), — они распознаются и откатываются.");
+        }
         sb.AppendLine(Texts.ScopeNote);
         sb.AppendLine();
 

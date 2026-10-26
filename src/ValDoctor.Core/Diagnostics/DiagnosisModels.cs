@@ -139,7 +139,8 @@ public sealed record DiagnosisReport(
     IReadOnlyList<HostPin> CurrentPins,
     FixPlan Plan,
     Verdict Verdict,
-    string? HostsFingerprint = null)
+    string? HostsFingerprint = null,
+    bool HasLegacyRiotFixContent = false)
 {
     public int HealthyCount => Domains.Count(d => d.IsReachable);
 

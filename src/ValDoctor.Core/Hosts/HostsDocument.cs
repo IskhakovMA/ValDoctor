@@ -131,6 +131,17 @@ public sealed class HostsDocument
     public bool HasManagedContent =>
         _lines.Any(l => IsMarker(l.Text) || TryParsePin(l.Text, out _) || TryParseDisabled(l.Text, out _, out _));
 
+    /// <summary>True when the file still contains lines in the RiotFix (0.1.0–0.2.1) format.</summary>
+    public bool HasLegacyRiotFixContent =>
+        _lines.Any(l =>
+        {
+            var t = l.Text.Trim();
+            return t.StartsWith(RiotFixLegacy.HostsBeginMarkerPrefix, StringComparison.Ordinal) ||
+                   t == RiotFixLegacy.HostsEndMarker ||
+                   (TryParsePin(l.Text, RiotFixLegacy.PinTagPrefix, out _)) ||
+                   (t.StartsWith(RiotFixLegacy.DisabledPrefix, StringComparison.Ordinal) && TryParseDisabled(l.Text, out _, out _));
+        });
+
     public IReadOnlyList<HostPin> GetPins()
     {
         var result = new List<HostPin>();
@@ -472,7 +483,7 @@ public sealed class HostsDocument
             return false;
         }
 
-        // The line must be exactly what ValDoctor (or ValDoctor, for the legacy tag) writes, modulo surrounding whitespace.
+        // The line must be exactly what ValDoctor writes (or RiotFix wrote, for the legacy tag), modulo surrounding whitespace.
         if (!string.Equals(text.Trim(), PinLine(new HostPin(host, address), tagPrefix), StringComparison.Ordinal))
         {
             return false;

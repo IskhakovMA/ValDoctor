@@ -48,8 +48,12 @@ public class TlsEndpointProberTests
         var result = await Prober(port).ProbeAsync("auth.riotgames.com", IPAddress.Loopback, TestContext.Current.CancellationToken);
         await server;
 
-        Assert.Equal(ProbeStage.TcpConnected, result.Stage);
-        Assert.Contains(result.Failure, new[] { ProbeFailure.TlsReset, ProbeFailure.TlsHandshakeFailed });
+        // The RST usually arrives during the TLS handshake; on some systems (seen on macOS) it can beat the end of the
+        // TCP connect, which is then correctly reported as a TCP reset. Either way the address must not be healthy.
+        var resetDuringTls = result.Stage == ProbeStage.TcpConnected &&
+                             result.Failure is ProbeFailure.TlsReset or ProbeFailure.TlsHandshakeFailed;
+        var resetDuringConnect = result.Stage == ProbeStage.None && result.Failure == ProbeFailure.TcpReset;
+        Assert.True(resetDuringTls || resetDuringConnect, $"{result.Stage}/{result.Failure}");
         Assert.False(result.Healthy);
     }
 

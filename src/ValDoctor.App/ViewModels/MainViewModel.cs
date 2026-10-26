@@ -111,7 +111,7 @@ internal sealed class MainViewModel : ObservableObject
         RefreshHostsState();
         if (CanRevert)
         {
-            _body += " Изменения, которые ValDoctor внёс раньше, можно отменить кнопкой «Отменить изменения».";
+            _body += " Изменения, внесённые раньше (в том числе программой под прежним названием RiotFix), можно отменить кнопкой «Отменить изменения».";
         }
     }
 
@@ -437,7 +437,7 @@ internal sealed class MainViewModel : ObservableObject
             FixReady = false;
             Details = "Изменения ValDoctor отменены. Проверка ещё не выполнялась.";
             SetStatus(outcome.ExitCode == ElevatedExitCode.NoChanges
-                ? new StatusMessage(StatusTone.Neutral, "Отменять нечего", "ValDoctor ничего не менял на этом компьютере.")
+                ? new StatusMessage(StatusTone.Neutral, "Отменять нечего", "Изменений ValDoctor (или RiotFix) на этом компьютере нет.")
                 : new StatusMessage(StatusTone.Success, "Изменения отменены",
                     "Изменения ValDoctor удалены, остальные настройки не тронуты. Перезапустите Riot Client. Чтобы проверить подключение, нажмите «Проверить подключение»."));
         });

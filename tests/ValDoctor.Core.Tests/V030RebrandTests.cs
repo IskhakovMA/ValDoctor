@@ -40,6 +40,20 @@ public class RiotFixCompatibilityTests
     }
 
     [Fact]
+    public void Legacy_content_is_flagged_until_converted_and_named_in_the_report()
+    {
+        var doc = HostsDocument.Parse(Encoding.ASCII.GetBytes(WrittenByRiotFix));
+        Assert.True(doc.HasLegacyRiotFixContent);
+        var fresh = HostsDocument.Parse(Encoding.ASCII.GetBytes("127.0.0.1 localhost\r\n"));
+        fresh.SetPins([Auth], false);
+        Assert.False(fresh.HasLegacyRiotFixContent);
+
+        var report = new DiagnosisReport(DateTimeOffset.Now, TimeSpan.Zero, [], false, true, true, doc.GetPins(), FixPlan.Empty,
+            Verdict.AllHealthy, HasLegacyRiotFixContent: true);
+        Assert.Contains("записанные RiotFix", ReportFormatter.Format(report, "0.3.0"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void New_writes_use_the_valdoctor_format_and_are_idempotent()
     {
         var doc = HostsDocument.Parse(Encoding.ASCII.GetBytes("127.0.0.1 localhost\r\n"));
@@ -298,8 +312,11 @@ public partial class ProductNameTests
             {
                 var line = lines[i].Replace("IskhakovMA/riotfix", string.Empty, StringComparison.Ordinal);
                 var code = line.TrimStart().StartsWith("//", StringComparison.Ordinal) ? string.Empty : line;
-                var literal = StringLiteral().Matches(code).Any(m => m.Value.Contains("riotfix", StringComparison.OrdinalIgnoreCase));
-                var xamlOrProject = !file.EndsWith(".cs", StringComparison.Ordinal) && line.Contains("riotfix", StringComparison.OrdinalIgnoreCase);
+                // Mentioning the former name is fine only together with the new one ("ValDoctor (или RiotFix)", "прежним названием").
+                static bool Unexplained(string t) => t.Contains("riotfix", StringComparison.OrdinalIgnoreCase) &&
+                    !t.Contains("ValDoctor", StringComparison.Ordinal) && !t.Contains("прежн", StringComparison.Ordinal);
+                var literal = StringLiteral().Matches(code).Any(m => Unexplained(m.Value));
+                var xamlOrProject = !file.EndsWith(".cs", StringComparison.Ordinal) && Unexplained(line);
                 if (!isLegacyLayer && (literal || xamlOrProject))
                 {
                     offenders.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");

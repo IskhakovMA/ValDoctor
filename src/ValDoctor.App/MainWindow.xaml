@@ -97,7 +97,7 @@
           <Button Style="{StaticResource LinkButton}" Content="Остановить проверку" Command="{Binding CancelCommand}" Margin="10,0" IsCancel="True"
                   Visibility="{Binding CanCancel, Converter={StaticResource BoolToVisibility}}" />
           <Button Style="{StaticResource LinkButton}" Content="Отменить изменения" Command="{Binding RevertCommand}" Margin="10,0"
-                  ToolTip="Убрать изменения, которые ValDoctor вносил раньше"
+                  ToolTip="Убрать изменения, которые ValDoctor (или RiotFix) вносил раньше"
                   Visibility="{Binding ShowRevertLink, Converter={StaticResource BoolToVisibility}}" />
         </WrapPanel>
       </StackPanel>

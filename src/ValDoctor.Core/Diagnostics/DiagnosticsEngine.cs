@@ -25,7 +25,7 @@ public sealed record DiagnosticsOptions
 
     /// <summary>
     /// Pauses before re-asking the system DNS after a failed lookup. A real log (26.10.2026) showed the system DNS
-    /// not answering for all six hosts at once and working again seconds later; without retries ValDoctor proposed six
+    /// not answering for all six hosts at once and working again seconds later; without retries RiotFix 0.1.0/0.2.0 proposed six
     /// unnecessary hosts entries. A persistent failure still fails after the retries and gets a verified fix.
     /// <para>
     /// The Windows DNS cache is deliberately NOT flushed during a check: the check must not change system state.
@@ -140,7 +140,8 @@ public sealed class DiagnosticsEngine
             hosts?.GetPins() ?? [],
             plan,
             verdict,
-            hosts is null ? null : HostsFingerprint.Of(hosts));
+            hosts is null ? null : HostsFingerprint.Of(hosts),
+            hosts?.HasLegacyRiotFixContent ?? false);
     }
 
     internal static Verdict DetermineVerdict(IReadOnlyList<DomainDiagnosis> domains, FixPlan plan)
