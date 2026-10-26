@@ -2,15 +2,12 @@ name: Сообщить о проблеме
 description: ValDoctor не помог, показал ошибку или повёл себя неожиданно
 labels: [bug]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Спасибо! Пожалуйста, не публикуйте логины, пароли, токены и другие личные данные.
   - type: input
     id: version
     attributes:
       label: Версия ValDoctor
-      placeholder: "0.1.0"
+      description: Указана в первой строке отчёта и в названии релиза.
+      placeholder: "0.3.0"
     validations:
       required: true
   - type: input
@@ -22,21 +19,26 @@ body:
     id: what
     attributes:
       label: Что произошло
-      description: Что вы нажали, что ожидали увидеть и что увидели.
+      description: Что вы нажали, что ожидали и что увидели.
     validations:
       required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Получилось ли войти в игру после исправления?
+      options:
+        - Исправление не применял
+        - Да
+        - Нет
+        - Не проверял
   - type: textarea
     id: report
     attributes:
       label: Отчёт о проверке
-      description: В ValDoctor нажмите кнопку ⓘ в правом верхнем углу → «Скопировать отчёт» и вставьте сюда. Отчёт не содержит личных данных.
+      description: |
+        В ValDoctor нажмите ⓘ в правом верхнем углу, затем «Скопировать отчёт».
+        Issues видны всем. Перед отправкой просмотрите отчёт: в нём есть часовой пояс, IP-адреса из ответов вашего DNS, строки из файла hosts и данные сертификатов. Удалите то, чем не хотите делиться.
       render: text
-  - type: dropdown
-    id: game
+  - type: markdown
     attributes:
-      label: Удалось ли войти в игру после исправления?
-      options:
-        - Не применял исправление
-        - Да
-        - Нет
-        - Не проверял
+      value: Не публикуйте логины, пароли, токены и другие личные данные. Об уязвимостях сообщайте приватно, через ссылку «Сообщить об уязвимости».
