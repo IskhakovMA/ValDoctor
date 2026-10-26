@@ -58,7 +58,7 @@ internal sealed class AppComposition
         Log);
 
     public FixPreflight CreatePreflight(Func<CancellationToken, Task<DiagnosisReport>> diagnose) =>
-        new(diagnose, Prober, Hosts.Load, log: Log);
+        new(diagnose, Prober, Hosts.Load, log: Log, systemDns: new SystemResolver());
 
     public UpdateChecker CreateUpdateChecker() => new(
         UpdateHttp,

@@ -149,13 +149,89 @@ public class TransientDnsTests
 
         // Same moment the report was finished (e.g. the first preflight just rebuilt it).
         var now = new ManualTime(report.StartedAt + report.Duration + TimeSpan.FromSeconds(2));
-        var result = await new FixPreflight(ct => { diagnoses++; return engine.RunAsync(RiotServices.All, null, ct); }, _prober, HostsDocument.Empty, now)
+        var result = await new FixPreflight(ct => { diagnoses++; return engine.RunAsync(RiotServices.All, null, ct); }, _prober, HostsDocument.Empty, now, systemDns: _dns)
             .CheckAsync(report, CancellationToken.None);
 
         Assert.Equal(PreflightStatus.Ready, result.Status);
         Assert.Equal(0, diagnoses);
         Assert.Equal(probesBefore + 1, _prober.CallsTo(pin.Host, pin.Address.ToString()));
     }
+
+    /// <summary>
+    /// Regression (review of 238ebf1): DNS persistently failed during the diagnosis, recovers right after it, and the
+    /// user clicks «Исправить подключение» within 10 seconds. 238ebf1 only re-probed the pinned address and returned
+    /// Ready, so an unnecessary hosts entry would have been written.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Regression_dns_recovers_right_after_diagnosis_and_user_clicks_fix_within_10_seconds(bool withSystemResolver)
+    {
+        AllSixWork();
+        _dns.FailFirst("auth.riotgames.com", 3); // fails for the whole diagnosis (1 try + 2 retries), then works
+        var engine = Engine();
+        var report = await engine.RunAsync(RiotServices.All, null, CancellationToken.None);
+        Assert.True(report.Plan.HasChanges);
+
+        var now = new ManualTime(report.StartedAt + report.Duration + TimeSpan.FromSeconds(2));
+        var preflight = Preflight(engine, now, withSystemResolver);
+
+        // Stage 1 (before the confirmation dialog), well inside the 10 s window.
+        var first = await preflight.CheckAsync(report, CancellationToken.None);
+
+        Assert.Equal(PreflightStatus.NoLongerNeeded, first.Status);
+        Assert.False(first.Report.Plan.HasChanges);
+    }
+
+    /// <summary>Stage 2: DNS was still down at stage 1 but recovers while the confirmation dialog is open.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Dns_recovering_between_confirmation_and_uac_is_caught_by_the_last_preflight(bool withSystemResolver)
+    {
+        AllSixWork();
+        _dns.FailFirst("auth.riotgames.com", 100);
+        var engine = Engine();
+        var report = await engine.RunAsync(RiotServices.All, null, CancellationToken.None);
+        var now = new ManualTime(report.StartedAt + report.Duration + TimeSpan.FromSeconds(1));
+        var preflight = Preflight(engine, now, withSystemResolver);
+
+        var first = await preflight.CheckAsync(report, CancellationToken.None);
+        Assert.Equal(PreflightStatus.Ready, first.Status);
+
+        _dns.FailFirst("auth.riotgames.com", 0); // DNS works again while the user reads the dialog
+        now.Now += TimeSpan.FromSeconds(3);
+        var second = await preflight.CheckAsync(first.Report, CancellationToken.None);
+
+        Assert.Equal(PreflightStatus.NoLongerNeeded, second.Status);
+        Assert.False(second.Report.Plan.HasChanges);
+    }
+
+    [Fact]
+    public async Task Persistent_dns_failure_keeps_the_fix_through_both_preflights_with_one_full_diagnosis_at_most()
+    {
+        AllSixWork();
+        _dns.FailFirst("auth.riotgames.com", 1000);
+        var engine = Engine();
+        var report = await engine.RunAsync(RiotServices.All, null, CancellationToken.None);
+        var pin = report.Plan.NewPins.Single();
+        var diagnoses = 0;
+        var now = new ManualTime(report.StartedAt + report.Duration + TimeSpan.FromSeconds(30)); // user read the result
+        var preflight = new FixPreflight(ct => { diagnoses++; return engine.RunAsync(RiotServices.All, null, ct); }, _prober, HostsDocument.Empty, now, systemDns: _dns);
+
+        var first = await preflight.CheckAsync(report, CancellationToken.None);
+        now.Now = first.Report.StartedAt + first.Report.Duration + TimeSpan.FromSeconds(4); // dialog confirmed quickly
+        var second = await preflight.CheckAsync(first.Report, CancellationToken.None);
+
+        Assert.Equal(PreflightStatus.Ready, first.Status);
+        Assert.Equal(PreflightStatus.Ready, second.Status);
+        Assert.Equal(pin, second.Report.Plan.NewPins.Single());
+        Assert.Equal(1, diagnoses); // stage 1 re-diagnosed (old result); stage 2 only a quick DNS lookup + re-probe
+    }
+
+    private FixPreflight Preflight(DiagnosticsEngine engine, TimeProvider time, bool withSystemResolver) =>
+        new(ct => engine.RunAsync(RiotServices.All, null, ct), _prober, HostsDocument.Empty, time,
+            systemDns: withSystemResolver ? _dns : null);
 
     /// <summary>The user read the result and clicked «Исправить подключение» half a minute later.</summary>
     private static ManualTime Later(DiagnosisReport report) => new(report.StartedAt + report.Duration + TimeSpan.FromSeconds(30));
@@ -218,6 +294,10 @@ public class AppCompositionTests
         }
 
         Assert.Contains("CreatePreflight(RunDiagnosisAsync)", vm, StringComparison.Ordinal);
+
+        // The app's preflight re-asks the real system DNS (quick path); without it, every DNS-based plan is fully re-diagnosed.
+        var preflight = vm[vm.IndexOf("public FixPreflight CreatePreflight(", StringComparison.Ordinal)..];
+        Assert.Contains("systemDns: new SystemResolver()", preflight[..preflight.IndexOf(';', StringComparison.Ordinal)], StringComparison.Ordinal);
     }
 
     [Fact]
