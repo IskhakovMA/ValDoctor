@@ -9,6 +9,9 @@ namespace RiotFix.Core.Diagnostics;
 
 public sealed record DiagnosticsOptions
 {
+    /// <summary>The timings used by the real application.</summary>
+    public static DiagnosticsOptions Product { get; } = new();
+
     public int MaxSystemIPv4 { get; init; } = 4;
 
     public int MaxSystemIPv6 { get; init; } = 2;
@@ -24,6 +27,11 @@ public sealed record DiagnosticsOptions
     /// Pauses before re-asking the system DNS after a failed lookup. A real log (26.10.2026) showed the system DNS
     /// not answering for all six hosts at once and working again seconds later; without retries RiotFix proposed six
     /// unnecessary hosts entries. A persistent failure still fails after the retries and gets a verified fix.
+    /// <para>
+    /// The Windows DNS cache is deliberately NOT flushed during a check: the check must not change system state.
+    /// A timeout is not cached, so a plain retry reaches the DNS server again; a cached negative answer
+    /// ("name not found") is a persistent answer, which the verified fix handles.
+    /// </para>
     /// </summary>
     public IReadOnlyList<TimeSpan> DnsRetryDelays { get; init; } = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3)];
 
@@ -48,7 +56,6 @@ public sealed class DiagnosticsEngine
     private readonly Func<HostsDocument?> _loadHosts;
     private readonly DiagnosticsOptions _options;
     private readonly IRiotFixLog _log;
-    private readonly Action? _flushDnsCache;
 
     public DiagnosticsEngine(
         ISystemResolver system,
@@ -57,10 +64,8 @@ public sealed class DiagnosticsEngine
         IProxyDetector proxy,
         Func<HostsDocument?> loadHosts,
         DiagnosticsOptions? options = null,
-        IRiotFixLog? log = null,
-        Action? flushDnsCache = null)
+        IRiotFixLog? log = null)
     {
-        _flushDnsCache = flushDnsCache;
         _system = system;
         _trusted = trusted;
         _prober = prober;
@@ -69,6 +74,22 @@ public sealed class DiagnosticsEngine
         _options = options ?? new DiagnosticsOptions();
         _log = log ?? NullLog.Instance;
     }
+
+    /// <summary>The options this engine runs with (exposed so tests can compare test and app configuration).</summary>
+    public DiagnosticsOptions Options => _options;
+
+    /// <summary>
+    /// The engine exactly as the application uses it: product timings (including DNS retries), no test shortcuts.
+    /// AppComposition must create engines only through this method.
+    /// </summary>
+    public static DiagnosticsEngine CreateDefault(
+        ISystemResolver system,
+        IReadOnlyList<ITrustedResolver> trusted,
+        IEndpointProber prober,
+        IProxyDetector proxy,
+        Func<HostsDocument?> loadHosts,
+        IRiotFixLog log) =>
+        new(system, trusted, prober, proxy, loadHosts, DiagnosticsOptions.Product, log);
 
     public async Task<DiagnosisReport> RunAsync(
         IReadOnlyList<RiotService> services,
@@ -95,26 +116,9 @@ public sealed class DiagnosticsEngine
         var completed = 0;
         progress?.Report(new DiagnosisProgress(0, services.Count, "Проверяем подключение…"));
 
-        // The Windows DNS cache may hold the failed answer; clear it once per run (no admin rights needed).
-        var flushed = 0;
-        void FlushOnce()
-        {
-            if (Interlocked.Exchange(ref flushed, 1) == 0 && _flushDnsCache is not null)
-            {
-                try
-                {
-                    _flushDnsCache();
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    _log.Warn($"DNS cache flush failed ({ex.GetType().Name}).");
-                }
-            }
-        }
-
         var tasks = services.Select(async service =>
         {
-            var result = await DiagnoseAsync(service, hosts, throttle, progress, services.Count, FlushOnce, cancellationToken).ConfigureAwait(false);
+            var result = await DiagnoseAsync(service, hosts, throttle, progress, services.Count, cancellationToken).ConfigureAwait(false);
             var done = Interlocked.Increment(ref completed);
             progress?.Report(new DiagnosisProgress(done, services.Count, $"Проверено {done} из {services.Count}"));
             return result;
@@ -208,7 +212,6 @@ public sealed class DiagnosticsEngine
         SemaphoreSlim throttle,
         IProgress<DiagnosisProgress>? progress,
         int total,
-        Action flushOnce,
         CancellationToken cancellationToken)
     {
         var host = service.Host;
@@ -222,11 +225,6 @@ public sealed class DiagnosticsEngine
         for (var i = 0; !dns.Success && i < _options.DnsRetryDelays.Count; i++)
         {
             retried = true;
-            if (i == 0)
-            {
-                flushOnce();
-            }
-
             await Task.Delay(_options.DnsRetryDelays[i], cancellationToken).ConfigureAwait(false);
             dns = await ResolveSystemAsync(host, cancellationToken).ConfigureAwait(false);
             _log.Info($"{host}: system DNS retry {i + 1}: {dns.Failure}.");

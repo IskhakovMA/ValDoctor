@@ -48,13 +48,14 @@ internal sealed class AppComposition
 
     public IEndpointProber Prober { get; } = new TlsEndpointProber(new ProbeOptions { UserAgent = $"RiotFix/{AppInfo.Version} (connectivity check)" });
 
-    public DiagnosticsEngine CreateEngine() => new(
+    /// <summary>Read-only diagnosis. Never flushes the DNS cache or changes anything else on the system.</summary>
+    public DiagnosticsEngine CreateEngine() => DiagnosticsEngine.CreateDefault(
         new SystemResolver(),
         TrustedResolvers.Defaults.Select(d => (ITrustedResolver)new DohResolver(d, DohHttp, TimeSpan.FromSeconds(4))).ToList(),
         Prober,
         new SystemProxyDetector(),
         Hosts.Load,
-        log: Log);
+        Log);
 
     public FixPreflight CreatePreflight(Func<CancellationToken, Task<DiagnosisReport>> diagnose) =>
         new(diagnose, Prober, Hosts.Load, log: Log);

@@ -54,6 +54,13 @@ public sealed class FixPreflight
 
     public static TimeSpan ProbeBudget { get; } = TimeSpan.FromSeconds(20);
 
+    /// <summary>
+    /// A plan built on a system DNS failure is re-diagnosed unless its diagnosis finished less than this long ago.
+    /// That diagnosis already retried the system DNS for several seconds, so repeating it immediately (e.g. the second
+    /// preflight right after the first one rebuilt the report) only doubles the wait without adding safety.
+    /// </summary>
+    public static TimeSpan DnsRecheckAfter { get; } = TimeSpan.FromSeconds(10);
+
     public async Task<PreflightResult> CheckAsync(DiagnosisReport report, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(report);
@@ -111,7 +118,8 @@ public sealed class FixPreflight
         // A plan that exists only because the system DNS failed is never trusted blindly: such failures are often
         // short-lived, so check from scratch whether the system DNS works again before writing anything.
         var newHosts = report.Plan.NewPins.Select(p => p.Host).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (report.Domains.Any(d => newHosts.Contains(d.Host) && !d.SystemDns.Success))
+        var sinceFinished = _time.GetUtcNow() - (report.StartedAt.ToUniversalTime() + report.Duration);
+        if (sinceFinished >= DnsRecheckAfter && report.Domains.Any(d => newHosts.Contains(d.Host) && !d.SystemDns.Success))
         {
             return "the fix is based on a system DNS failure";
         }
