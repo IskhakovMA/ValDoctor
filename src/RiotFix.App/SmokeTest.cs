@@ -41,12 +41,15 @@ internal static class SmokeTest
             window.DataContext = vm;
             window.Show();
 
-            void State(string file, DiagnosisReport? report = null, StatusMessage? message = null)
+            void State(string file, DiagnosisReport? report = null, StatusMessage? message = null, bool canRevert = false)
             {
                 if (report is not null)
                 {
                     vm.ShowReport(report, message ?? Texts.ForReport(report));
                 }
+
+                // After ShowReport (which re-reads the real, unchanged hosts file of the runner).
+                vm.Preview(canRevert: canRevert);
 
                 Render(window, outputDir, file);
                 AssertPlainMainScreen(window, file);
@@ -55,15 +58,14 @@ internal static class SmokeTest
             ThemeManager.Apply(app, dark: false);
             State("01-light-initial.png");
             vm.Preview(busy: new StatusMessage(StatusTone.Neutral, "Проверяем подключение…", "Это займёт несколько секунд."));
-            State("02-light-checking.png");
+            Render(window, outputDir, "02-light-checking.png");
+            AssertPlainMainScreen(window, "02-light-checking.png");
             vm.Preview();
             State("03-light-working.png", SampleData.AllHealthy());
             State("04-light-problem-fixable.png", SampleData.FixAvailable());
 
             var after = SampleData.AllHealthy();
-            vm.Preview(canRevert: true);
-            State("05-light-applied.png", after, Texts.AfterFix(after, SampleData.FixAvailable().Plan.NewPins));
-            vm.Preview(canRevert: false);
+            State("05-light-applied.png", after, Texts.AfterFix(after, SampleData.FixAvailable().Plan.NewPins), canRevert: true);
             State("06-light-no-safe-fix.png", SampleData.NoFix());
 
             // The technical report is still there, one click away.
@@ -86,8 +88,7 @@ internal static class SmokeTest
 
             window.Width = 420;
             window.Height = 440;
-            vm.Preview(canRevert: true);
-            State("10-dark-min-size-revert.png", SampleData.NoFix());
+            State("10-dark-min-size-revert.png", SampleData.NoFix(), canRevert: true);
 
             File.WriteAllText(Path.Join(outputDir, "smoke-ok.txt"), $"RiotFix {AppInfo.Version} smoke test passed");
             window.Close();

@@ -8,7 +8,8 @@
         Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}"
         FontFamily="{StaticResource UiFont}" FontSize="14"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
-  <Grid x:Name="Root" Background="{DynamicResource Bg}" Margin="24,20,24,18">
+  <Grid x:Name="Root" Background="{DynamicResource Bg}">
+  <Grid Margin="24,20,24,18">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
@@ -35,5 +36,6 @@
       <LineBreak />
       <Run Text="Резервная копия (создаётся перед первым изменением):" /> <Run Text="{Binding BackupPath, Mode=OneWay}" />
     </TextBlock>
+  </Grid>
   </Grid>
 </Window>
