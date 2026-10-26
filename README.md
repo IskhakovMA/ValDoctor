@@ -134,5 +134,3 @@ dotnet publish src/ValDoctor.App/ValDoctor.App.csproj -c Release -r win-x64 --se
 
 Лицензия [MIT](LICENSE). Программа распространяется как есть, без гарантий.
 
-Riot Games, Riot Client, VALORANT и League of Legends являются товарными знаками Riot Games, Inc.
-Названия упомянуты только для описания совместимости.
