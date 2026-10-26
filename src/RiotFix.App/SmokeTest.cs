@@ -87,7 +87,7 @@ internal static class SmokeTest
             vm.ShowUpdate(null);
 
             window.Width = 420;
-            window.Height = 440;
+            window.Height = 500;
             State("10-dark-min-size-revert.png", SampleData.NoFix(), canRevert: true);
 
             File.WriteAllText(Path.Join(outputDir, "smoke-ok.txt"), $"RiotFix {AppInfo.Version} smoke test passed");
